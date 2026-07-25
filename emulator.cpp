@@ -785,11 +785,12 @@ void parse(FILE* fin, uint8_t* mem, instr* imem, int& memoff, label_loc* labels,
 		if ( !fgets(rbuf, 1024, fin) ) break;
 		for ( char* p = rbuf; *p; p ++ ) *p = tolower((unsigned char)*p);
 		line++;
+		
+		char *comment_ptr = strchr(rbuf, '#');
+		if ( comment_ptr ) *comment_ptr = '\0';
 
 		char* ftok = strtok(rbuf, " \t\r\n");
 		if ( !ftok ) continue;
-
-		if ( ftok[0] == '#' ) continue;
 
 		if ( ftok[strlen(ftok)-1] == ':' ) {
 			ftok[strlen(ftok)-1] = 0;

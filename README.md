@@ -49,4 +49,4 @@ The following are the supported commands:
 ## Caveats
 
 * Pseudo-instructions are not elegantly compiled, yet
-* Only one action per line supported! For example, comments and labels shoud go on their own line
+* Only one instruction per line supported!
