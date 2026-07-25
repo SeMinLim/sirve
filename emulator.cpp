@@ -4,6 +4,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+#include <new>
 
 #include "cachesim.h"
 
@@ -30,13 +31,49 @@ bool streq(char* s, const char* q) {
 }
 
 uint32_t signextend(uint32_t in, int bits) {
-	if ( in & (1<<(bits-1)) ) return ((-1)<<bits)|in;
+	if ( in & (1u << (bits - 1)) ) return (~0u << bits) | in;
 	return in;
+}
+
+uint32_t readWordLE(const uint8_t* mem, uint32_t addr) {
+	uint32_t value = 0;
+	for ( int i = 0; i < 4; i ++ ) {
+		value |= ((uint32_t)mem[addr + i]) << (i * 8);
+	}
+	return value;
+}
+
+void writeWordLE(uint8_t* mem, uint32_t addr, uint32_t value) {
+	for ( int i = 0; i < 4; i ++ ) {
+		mem[addr + i] = (uint8_t)((value >> (i * 8)) & 0xffu);
+	}
+}
+
+int32_t asSigned32(uint32_t value) {
+	int32_t signedValue = 0;
+	memcpy(&signedValue, &value, sizeof(signedValue));
+	return signedValue;
+}
+
+uint32_t arithmeticShiftRight(uint32_t value, uint32_t shiftAmount) {
+	shiftAmount &= 0x1f;
+	if ( shiftAmount == 0 ) return value;
+
+	uint32_t shifted = value >> shiftAmount;
+	if ( value & 0x80000000u ) shifted |= ~0u << (32 - shiftAmount);
+	return shifted;
 }
 
 void print_syntax_error(int line, const char* msg) {
 	printf( "Line %4d: Syntax error! %s\n", line, msg );
 	exit(1);
+}
+
+void copyLabel(char* destination, const char* label, int line) {
+	if ( !label || strlen(label) >= MAX_LABEL_LEN ) {
+		print_syntax_error(line, "Malformed label");
+	}
+	memcpy(destination, label, strlen(label) + 1);
 }
 
 void print_regfile(uint32_t rf[32]) {
@@ -146,13 +183,31 @@ instr_type parse_instr(char* tok) {
 }
 
 int parse_reg(char* tok, int line, bool strict = true) {
+	if ( !tok ) {
+		if ( strict ) print_syntax_error(line, "Malformed register name");
+		return -1;
+	}
+
 	if ( tok[0] == 'x' ) {
-		int ri = atoi(tok+1);
-		if ( ri < 0 || ri > 32 ) {
+		if ( tok[1] == '\0' ) {
 			if ( strict ) print_syntax_error(line, "Malformed register name");
 			return -1;
 		}
-		return ri;
+		for ( char* p = tok + 1; *p; p ++ ) {
+			if ( !isdigit((unsigned char)*p) ) {
+				if ( strict ) print_syntax_error(line, "Malformed register name");
+				return -1;
+			}
+		}
+
+		char* end = NULL;
+		errno = 0;
+		long ri = strtol(tok + 1, &end, 10);
+		if ( errno == ERANGE || end == tok + 1 || *end != '\0' || ri < 0 || ri >= 32 ) {
+			if ( strict ) print_syntax_error(line, "Malformed register name");
+			return -1;
+		}
+		return (int)ri;
 	}
 	if ( streq(tok, "zero") ) return 0; 
 	if ( streq(tok, "ra") ) return 1;
@@ -192,27 +247,42 @@ int parse_reg(char* tok, int line, bool strict = true) {
 }
 
 uint32_t parse_imm(char* tok, int bits, int line, bool strict = true) {
-	if ( !(tok[0]>='0'&&tok[0]<='9') && tok[0] != '-' && strict) {
-		print_syntax_error(line, "Malformed immediate value" );
+	if ( !tok || tok[0] == '\0' ) {
+		if ( strict ) print_syntax_error(line, "Malformed immediate value");
+		return 0;
 	}
-	long int imml = strtol(tok, NULL, 0);
 
+	char* end = NULL;
+	errno = 0;
+	long long imml = strtoll(tok, &end, 0);
+	if ( errno == ERANGE || end == tok || (strict && *end != '\0') ) {
+		if ( strict ) print_syntax_error(line, "Malformed immediate value");
+		return 0;
+	}
 
-	if (imml > ((1<<bits)-1) || imml < -(1<<(bits-1)) ) {
-		printf( "Syntax error at token %s\n", tok);
+	long long minValue = -(1LL << (bits - 1));
+	unsigned long long maxValue = (1ULL << bits) - 1;
+	if ( imml < minValue || (imml >= 0 && (unsigned long long)imml > maxValue) ) {
+		printf( "Syntax error at token %s\n", tok );
 		exit(1);
 	}
-	uint64_t uv = *(uint64_t*)&imml;
-	uint32_t hv = (uv&UINT32_MAX);
 
-	return hv;
+	return (uint32_t)imml;
 }
 
 void parse_mem(char* tok, int* reg, uint32_t* imm, int bits, int line) {
-	char* imms = strtok(tok, "(");
-	char* regs = strtok(NULL, ")");
-	*imm = parse_imm(imms, bits, line);
-	*reg = parse_reg(regs, line);
+	if ( !tok ) print_syntax_error(line, "Malformed memory operand");
+
+	char* openParen = strchr(tok, '(');
+	char* closeParen = strchr(tok, ')');
+	if ( !openParen || !closeParen || closeParen < openParen || closeParen[1] != '\0' ) {
+		print_syntax_error(line, "Malformed memory operand");
+	}
+
+	*openParen = '\0';
+	*closeParen = '\0';
+	*imm = parse_imm(tok, bits, line);
+	*reg = parse_reg(openParen + 1, line);
 }
 
 uint32_t mem_flush_words = 0;
@@ -223,68 +293,96 @@ uint32_t cache_read_hits = 0;
 
 
 void mem_write(uint8_t* mem, uint32_t addr, uint32_t data, instr_type op) {
-	//printf( "Storing %x to %d\n", data, addr );
 	int bytes = 0;
-	switch (op ) {
+	switch ( op ) {
 		case SB: bytes = 1; break;
 		case SH: bytes = 2; break;
 		case SW: bytes = 4; break;
+		default: break;
 	}
-	if ( addr < MEM_BYTES && addr + bytes <= MEM_BYTES ) {
-		mem_write_reqs ++;
-		int way = cache_peek(addr,bytes);
-		if ( way < 0 ) {
-			cache_flush(addr, mem);
-			uint32_t waddr = addr-(addr&((1<<(2+CACHE_LINE_WORD_SZ))-1));
-			for ( int i = 0; i < CACHE_LINE_WORD; i++ ) {
-				cache_update(waddr+(i*4), *(uint32_t*)&(mem[waddr+(i*4)]));
-			}
-			mem_flush_words += CACHE_LINE_WORD;
-		} else {
-			cache_write_hits ++;
-		}
-		cache_write(addr,data,bytes);
-	} else if ( addr == MEM_BYTES ) {
+
+	if ( addr == MEM_BYTES ) {
 		printf( "[System output]: 0x%x\n", data );
-	} else {
-		printf( "0x%x -- 0x%x\n", addr, data);
+		return;
 	}
+	if ( bytes == 0 || addr >= MEM_BYTES || (uint32_t)bytes > MEM_BYTES - addr ) {
+		printf( "Memory write out of bounds at address 0x%08x\n", addr );
+		exit(1);
+	}
+	if ( bytes > 1 && (addr & (uint32_t)(bytes - 1)) != 0 ) {
+		printf( "Misaligned memory write at address 0x%08x\n", addr );
+		exit(1);
+	}
+
+	mem_write_reqs ++;
+	int way = cache_peek(addr, bytes);
+	if ( way < 0 ) {
+		cache_flush(addr, mem);
+		uint32_t lineBytes = CACHE_LINE_WORD * 4;
+		uint32_t waddr = addr & ~(lineBytes - 1u);
+		if ( waddr > MEM_BYTES - lineBytes ) {
+			printf( "Cache line out of memory bounds at address 0x%08x\n", waddr );
+			exit(1);
+		}
+		for ( int i = 0; i < CACHE_LINE_WORD; i ++ ) {
+			cache_update(waddr + (i * 4), readWordLE(mem, waddr + (i * 4)));
+		}
+		mem_flush_words += CACHE_LINE_WORD;
+	} else {
+		cache_write_hits ++;
+	}
+	cache_write(addr, data, bytes);
 }
+
 uint32_t mem_read(uint8_t* mem, uint32_t addr, instr_type op) {
 	uint32_t ret = 0;
 	int bytes = 0;
 
-	switch(op) {
-		case LB: 
+	switch ( op ) {
+		case LB:
 		case LBU: bytes = 1; break;
 		case LH:
 		case LHU: bytes = 2; break;
-		case LW:  bytes = 4; break;
+		case LW: bytes = 4; break;
+		default: break;
 	}
-	if ( addr + bytes <= MEM_BYTES ) {
-		mem_read_reqs ++;
-		int way = cache_peek(addr,bytes);
-		if ( way < 0 ) {
-			cache_flush(addr, mem);
-			mem_flush_words += CACHE_LINE_WORD;
-			uint32_t waddr = addr-(addr&((1<<(2+CACHE_LINE_WORD_SZ))-1));
-			for ( int i = 0; i < CACHE_LINE_WORD; i++ ) {
-				cache_update(waddr+(i*4), *(uint32_t*)&(mem[waddr+(i*4)]));
-			}
-		} else {
-			cache_read_hits++;
-			//printf( "%x %d--\n", addr,way);
-		}
-		uint32_t cr = cache_read(addr,bytes);
-		switch(op) {
-			case LB: ret = signextend(cr, 8); break;
-			case LBU: ret = (cr&0xff); break;
-			case LH: ret = signextend(cr,16); break;
-			case LHU: ret = (cr&0xffff); break;
-			case LW: ret = cr; break;
-		}
+
+	if ( bytes == 0 || addr >= MEM_BYTES || (uint32_t)bytes > MEM_BYTES - addr ) {
+		printf( "Memory read out of bounds at address 0x%08x\n", addr );
+		exit(1);
 	}
-	//printf( "Reading %x from %d\n", ret, addr );
+	if ( bytes > 1 && (addr & (uint32_t)(bytes - 1)) != 0 ) {
+		printf( "Misaligned memory read at address 0x%08x\n", addr );
+		exit(1);
+	}
+
+	mem_read_reqs ++;
+	int way = cache_peek(addr, bytes);
+	if ( way < 0 ) {
+		cache_flush(addr, mem);
+		mem_flush_words += CACHE_LINE_WORD;
+		uint32_t lineBytes = CACHE_LINE_WORD * 4;
+		uint32_t waddr = addr & ~(lineBytes - 1u);
+		if ( waddr > MEM_BYTES - lineBytes ) {
+			printf( "Cache line out of memory bounds at address 0x%08x\n", waddr );
+			exit(1);
+		}
+		for ( int i = 0; i < CACHE_LINE_WORD; i ++ ) {
+			cache_update(waddr + (i * 4), readWordLE(mem, waddr + (i * 4)));
+		}
+	} else {
+		cache_read_hits ++;
+	}
+
+	uint32_t cr = cache_read(addr, bytes);
+	switch ( op ) {
+		case LB: ret = signextend(cr, 8); break;
+		case LBU: ret = cr & 0xff; break;
+		case LH: ret = signextend(cr, 16); break;
+		case LHU: ret = cr & 0xffff; break;
+		case LW: ret = cr; break;
+		default: break;
+	}
 
 	return ret;
 }
@@ -313,23 +411,30 @@ typedef struct {
 } instr;
 
 void append_source(const char* op, const char* a1, const char* a2, const char* a3, source* src, instr* i) {
-	char tbuf[128]; // not safe... static size... but should be okay since label length enforced
+	char tbuf[128];
+	int slen = -1;
 	if ( op && a1 && !a2 && !a3 ) {
-		sprintf(tbuf, "%s %s", op, a1);
+		slen = snprintf(tbuf, sizeof(tbuf), "%s %s", op, a1);
 	} else if ( op && a1 && a2 && !a3 ) {
-		sprintf(tbuf, "%s %s, %s", op, a1, a2);
+		slen = snprintf(tbuf, sizeof(tbuf), "%s %s, %s", op, a1, a2);
 	} else if ( op && a1 && a2 && a3 ) {
-		sprintf(tbuf, "%s %s, %s, %s", op, a1, a2, a3);
+		slen = snprintf(tbuf, sizeof(tbuf), "%s %s, %s, %s", op, a1, a2, a3);
 	} else {
 		return;
 	}
-	int slen = strlen(tbuf);
-	if ( slen + src->offset < MAX_SRC_LEN ) {
-		strncpy(src->src+src->offset, tbuf, strlen(tbuf));
 
-		i->psrc = src->src+src->offset;
-		src->offset += slen+1;
+	if ( slen < 0 || slen >= (int)sizeof(tbuf) ) {
+		printf( "Compiled instruction text is too long\n" );
+		exit(1);
 	}
+	if ( src->offset < 0 || src->offset > MAX_SRC_LEN - (slen + 1) ) {
+		printf( "Compiled instruction source buffer is full\n" );
+		exit(1);
+	}
+
+	memcpy(src->src + src->offset, tbuf, (size_t)slen + 1);
+	i->psrc = src->src + src->offset;
+	src->offset += slen + 1;
 }
 
 
@@ -349,27 +454,47 @@ uint32_t label_addr(char* label , label_loc* labels, int label_count, int orig_l
 
 //typedef enum {SECTION_NONE, SECTION_TEXT, SECTION_DATA} sectionType;
 int parse_data_element(int line, int size, uint8_t* mem, int offset) {
-	while (char* t = strtok(NULL, " \t\r\n") ) {
+	while ( char* t = strtok(NULL, " \t\r\n") ) {
+		char* end = NULL;
 		errno = 0;
-		int64_t v = strtol(t, NULL, 0);
-		int64_t vs = (v>>(size*8));
-		if ( errno == ERANGE || (vs > 0 && vs != -1 ) ) {
-			printf( "Value out of bounds at line %d : %s\n", line, t);
+		long long parsed = strtoll(t, &end, 0);
+		long long minValue = -(1LL << ((size * 8) - 1));
+		unsigned long long maxValue = (1ULL << (size * 8)) - 1;
+		if ( errno == ERANGE || end == t || *end != '\0' || parsed < minValue ||
+		     (parsed >= 0 && (unsigned long long)parsed > maxValue) ) {
+			printf( "Value out of bounds at line %d : %s\n", line, t );
 			exit(2);
 		}
-		//printf ( "parse_data_element %d: %d %ld %d %d\n", line, size, v, errno, sizeof(long int));
-		memcpy(&mem[offset], &v, size);
+		if ( offset < 0 || offset > MEM_BYTES - size ) {
+			printf( "Data segment out of bounds at line %d\n", line );
+			exit(2);
+		}
+
+		uint64_t value = (uint64_t)parsed;
+		for ( int i = 0; i < size; i ++ ) {
+			mem[offset + i] = (uint8_t)((value >> (i * 8)) & 0xffu);
+		}
 		offset += size;
-		//strtok(NULL, ",");
 	}
 	return offset;
 }
+
 int parse_data_zero(int line, uint8_t* mem, int offset) {
 	char* t = strtok(NULL, " \t\r\n");
-	int bytes = atoi(t);
-	memset(&mem[offset], 0, bytes);
+	if ( !t ) print_syntax_error(line, "Missing .zero size");
 
-	return offset + bytes;
+	char* end = NULL;
+	errno = 0;
+	long bytes = strtol(t, &end, 0);
+	if ( errno == ERANGE || end == t || *end != '\0' || bytes < 0 ||
+	     offset < 0 || offset > MEM_BYTES ||
+	     (unsigned long)bytes > (unsigned long)(MEM_BYTES - offset) ) {
+		printf( "Data segment out of bounds at line %d\n", line );
+		exit(2);
+	}
+
+	memset(&mem[offset], 0, (size_t)bytes);
+	return offset + (int)bytes;
 }
 int parse_assembler_directive(int line, char* ftok, uint8_t* mem, int memoff) {
 	//printf( "assembler directive %s\n", ftok );
@@ -408,8 +533,7 @@ int parse_pseudoinstructions(int line, char* ftok, instr* imem, int ioff, label_
 			printf( "Syntax error at line %d -- %lx, %x\n", line, imml, INT32_MAX);
 			exit(1);
 		}
-		uint64_t uv = *(uint64_t*)&imml;
-		uint32_t hv = (uv&UINT32_MAX);
+		uint32_t hv = (uint32_t)imml;
 
 		char areg[4]; sprintf(areg, "x%02d", reg);
 		char immu[12]; sprintf(immu, "0x%08x" , (hv>>12));
@@ -442,14 +566,14 @@ int parse_pseudoinstructions(int line, char* ftok, instr* imem, int ioff, label_
 		instr* i = &imem[ioff];
 		i->op = LUI;
 		i->a1.type = OPTYPE_REG; i->a1.reg = reg;
-		i->a2.type = OPTYPE_LABEL; strncpy(i->a2.label, o2, MAX_LABEL_LEN);
+		i->a2.type = OPTYPE_LABEL; copyLabel(i->a2.label, o2, line);
 		i->orig_line = line;
 		//append_source(ftok, o1, o2, o3, src, i); // done in normalize
 		instr* i2 = &imem[ioff+1];
 		i2->op = ADDI;
 		i2->a1.type = OPTYPE_REG; i2->a1.reg = reg;
 		i2->a2.type = OPTYPE_REG; i2->a2.reg = reg;
-		i2->a3.type = OPTYPE_LABEL; strncpy(i2->a3.label, o2, MAX_LABEL_LEN);
+		i2->a3.type = OPTYPE_LABEL; copyLabel(i2->a3.label, o2, line);
 		i2->orig_line = line;
 		//append_source(ftok, o1, o2, o3, src, i2); // done in normalize
 		return 2;
@@ -496,7 +620,7 @@ int parse_pseudoinstructions(int line, char* ftok, instr* imem, int ioff, label_
 		instr* i = &imem[ioff];
 		i->op = JAL;
 		i->a1.type = OPTYPE_REG; i->a1.reg = 0;
-		i->a2.type = OPTYPE_LABEL; strncpy(i->a2.label, o1, MAX_LABEL_LEN);
+		i->a2.type = OPTYPE_LABEL; copyLabel(i->a2.label, o1, line);
 		i->orig_line = line;
 		append_source("j", "x0", o1, NULL, src, i);
 		return 1;
@@ -507,7 +631,7 @@ int parse_pseudoinstructions(int line, char* ftok, instr* imem, int ioff, label_
 		instr* i = &imem[ioff];
 		i->op = JAL;
 		i->a1.type = OPTYPE_REG; i->a1.reg = 1;
-		i->a2.type = OPTYPE_LABEL; strncpy(i->a2.label, o1, MAX_LABEL_LEN);
+		i->a2.type = OPTYPE_LABEL; copyLabel(i->a2.label, o1, line);
 		i->orig_line = line;
 		append_source("jal", "x1", o1, NULL, src, i);
 		return 1;
@@ -529,7 +653,7 @@ int parse_pseudoinstructions(int line, char* ftok, instr* imem, int ioff, label_
 		i->op = BNE;
 		i->a1.type = OPTYPE_REG; i->a1.reg = parse_reg(o1, line);
 		i->a2.type = OPTYPE_REG; i->a2.reg = 0;
-		i->a3.type = OPTYPE_LABEL; strncpy(i->a3.label, o2, MAX_LABEL_LEN);
+		i->a3.type = OPTYPE_LABEL; copyLabel(i->a3.label, o2, line);
 		i->orig_line = line;
 		append_source("bne", "x0", o1, o2, src, i);
 		return 1;
@@ -540,7 +664,7 @@ int parse_pseudoinstructions(int line, char* ftok, instr* imem, int ioff, label_
 		i->op = BEQ;
 		i->a1.type = OPTYPE_REG; i->a1.reg = parse_reg(o1, line);
 		i->a2.type = OPTYPE_REG; i->a2.reg = 0;
-		i->a3.type = OPTYPE_LABEL; strncpy(i->a3.label, o2, MAX_LABEL_LEN);
+		i->a3.type = OPTYPE_LABEL; copyLabel(i->a3.label, o2, line);
 		i->orig_line = line;
 		append_source("beq", "x0", o1, o2, src, i);
 		return 1;
@@ -551,7 +675,7 @@ int parse_pseudoinstructions(int line, char* ftok, instr* imem, int ioff, label_
 		i->op = BLT;
 		i->a1.type = OPTYPE_REG; i->a2.reg = parse_reg(o1, line);
 		i->a2.type = OPTYPE_REG; i->a1.reg = parse_reg(o2, line);
-		i->a3.type = OPTYPE_LABEL; strncpy(i->a3.label, o3, MAX_LABEL_LEN);
+		i->a3.type = OPTYPE_LABEL; copyLabel(i->a3.label, o3, line);
 		i->orig_line = line;
 		append_source("blt", o2, o1, o3, src, i);
 		return 1;
@@ -562,7 +686,7 @@ int parse_pseudoinstructions(int line, char* ftok, instr* imem, int ioff, label_
 		i->op = BGE;
 		i->a1.type = OPTYPE_REG; i->a2.reg = parse_reg(o1, line);
 		i->a2.type = OPTYPE_REG; i->a1.reg = parse_reg(o2, line);
-		i->a3.type = OPTYPE_LABEL; strncpy(i->a3.label, o3, MAX_LABEL_LEN);
+		i->a3.type = OPTYPE_LABEL; copyLabel(i->a3.label, o3, line);
 		i->orig_line = line;
 		append_source("bge", o2, o1, o3, src, i);
 		return 1;
@@ -571,8 +695,10 @@ int parse_pseudoinstructions(int line, char* ftok, instr* imem, int ioff, label_
 }
 
 int parse_instr(int line, char* ftok, instr* imem, int memoff, label_loc* labels, source* src) {
-	if ( memoff +4 > DATA_OFFSET ) {
-		printf( "Instructions in data segment! Line %d\n", line );
+	int instrBytes = 4;
+	if ( streq(ftok, "li") || streq(ftok, "la") || streq(ftok, "lla") ) instrBytes = 8;
+	if ( memoff < TEXT_OFFSET || memoff > DATA_OFFSET - instrBytes ) {
+		printf( "Instructions exceed the text segment! Line %d\n", line );
 		exit(1);
 	}
 	char* o1 = strtok(NULL, " \t\r\n,");
@@ -597,12 +723,12 @@ int parse_instr(int line, char* ftok, instr* imem, int memoff, label_loc* labels
 				if ( o2 ) { // two operands, reg, label
 					if ( !o1 || !o2 || o3 || o4 ) print_syntax_error( line, "Invalid format" );
 					i->a1.type = OPTYPE_REG; i->a1.reg = parse_reg(o1, line);
-					i->a2.type = OPTYPE_LABEL; strncpy(i->a2.label, o2, MAX_LABEL_LEN);
+					i->a2.type = OPTYPE_LABEL; copyLabel(i->a2.label, o2, line);
 				} else { // one operand, label
 					if ( !o1 || o2 || o3 || o4 ) print_syntax_error( line, "Invalid format" );
 
 					i->a1.type = OPTYPE_REG; i->a1.reg = 1;
-					i->a2.type = OPTYPE_LABEL; strncpy(i->a2.label, o1, MAX_LABEL_LEN);
+					i->a2.type = OPTYPE_LABEL; copyLabel(i->a2.label, o1, line);
 				}
 				return 1;
 			case JALR:
@@ -632,7 +758,7 @@ int parse_instr(int line, char* ftok, instr* imem, int memoff, label_loc* labels
 				if ( !o1 || !o2 || !o3 || o4 ) print_syntax_error( line, "Invalid format" );
 				i->a1.reg = parse_reg(o1, line);
 				i->a2.reg = parse_reg(o2, line);
-				i->a3.type = OPTYPE_LABEL; strncpy(i->a3.label, o3, MAX_LABEL_LEN);
+				i->a3.type = OPTYPE_LABEL; copyLabel(i->a3.label, o3, line);
 				return 1;
 			case LUI: 
 			case AUIPC: // how to deal with LSB correctly? FIXME
@@ -657,7 +783,7 @@ void parse(FILE* fin, uint8_t* mem, instr* imem, int& memoff, label_loc* labels,
 	char rbuf[1024];
 	while(!feof(fin)) {
 		if ( !fgets(rbuf, 1024, fin) ) break;
-		for (char* p = rbuf; *p; ++p) *p = tolower(*p);
+		for ( char* p = rbuf; *p; p ++ ) *p = tolower((unsigned char)*p);
 		line++;
 
 		char* ftok = strtok(rbuf, " \t\r\n");
@@ -675,7 +801,7 @@ void parse(FILE* fin, uint8_t* mem, instr* imem, int& memoff, label_loc* labels,
 				printf( "Exceeded maximum number of supported labels" );
 				exit(3);
 			}
-			strncpy(labels[label_count].label, ftok, MAX_LABEL_LEN);
+			copyLabel(labels[label_count].label, ftok, line);
 			labels[label_count].loc = memoff;
 			label_count++;
 			//printf( "Parsing label %s at mem %x\n", ftok, memoff );
@@ -687,7 +813,7 @@ void parse(FILE* fin, uint8_t* mem, instr* imem, int& memoff, label_loc* labels,
 					memoff = parse_assembler_directive(line, ntok, mem, memoff);
 				} else {
 					int count = parse_instr(line, ntok, imem, memoff, labels, src);
-					for ( int i = 0; i < count; i++ ) *(uint32_t*)&mem[memoff+(i*4)] = 0xcccccccc;
+					for ( int i = 0; i < count; i ++ ) writeWordLE(mem, memoff + (i * 4), 0xcccccccc);
 					memoff += count*4;
 				}
 			}
@@ -695,7 +821,7 @@ void parse(FILE* fin, uint8_t* mem, instr* imem, int& memoff, label_loc* labels,
 			memoff = parse_assembler_directive(line, ftok, mem, memoff);
 		} else {
 			int count = parse_instr(line, ftok, imem, memoff, labels, src);
-			for ( int i = 0; i < count; i++ ) *(uint32_t*)&mem[memoff+(i*4)] = 0xcccccccc;
+			for ( int i = 0; i < count; i ++ ) writeWordLE(mem, memoff + (i * 4), 0xcccccccc);
 			memoff += count*4;
 		}
 	}
@@ -714,12 +840,19 @@ void execute(uint8_t* mem, instr* imem, label_loc* labels, int label_count, bool
 	bool stepping = !start_immediate;
 	int stepcnt = 0;
 	char keybuf[128];
-	char* kbp = keybuf;
-
 
 	bool dexit = false;
 	while(!dexit) {
-		uint32_t iid = pc/4;
+		if ( (pc & 0x3u) != 0 ) {
+			printf( "Instruction address misaligned: 0x%08x\n", pc );
+			exit(1);
+		}
+		if ( pc >= DATA_OFFSET ) {
+			printf( "Instruction address out of bounds: 0x%08x\n", pc );
+			exit(1);
+		}
+
+		uint32_t iid = pc / 4;
 		instr i = imem[iid];
 		inst_cnt ++;
 
@@ -738,7 +871,7 @@ void execute(uint8_t* mem, instr* imem, label_loc* labels, int label_count, bool
 					std::string linebuf;
 					fflush(stdout);
 					linenoise::Readline(">>", linebuf);
-					memcpy(keybuf, linebuf.c_str(), 128);
+					snprintf(keybuf, sizeof(keybuf), "%s", linebuf.c_str());
 					linenoise::AddHistory(linebuf.c_str());
 					//while ((kbp = linenoise?::Readline(">>")) == NULL);
 					//fgets(keybuf, 128, stdin);
@@ -793,18 +926,22 @@ void execute(uint8_t* mem, instr* imem, label_loc* labels, int label_count, bool
 						if ( reg < 0 ) print_regfile(rf);
 					}
 					if ( keybuf[0] == 'm' ) {
-						uint32_t addr = parse_imm(keybuf+1, 31, 0, false); // just for simplicity
+						uint32_t addr = parse_imm(keybuf + 1, 31, 0, false);
 						int cnt = 1;
 						char* ftok = strtok(keybuf, " \t\r\n");
 						ftok = strtok(NULL, " \t\r\n");
-						if ( ftok ) {
-							cnt = parse_imm(ftok, 16, 0, false);
+						if ( ftok ) cnt = parse_imm(ftok, 16, 0, false);
+
+						uint64_t byteCount = (uint64_t)cnt * 4;
+						if ( addr >= MEM_BYTES || byteCount > MEM_BYTES - addr ) {
+							printf( "Memory inspection out of bounds at address 0x%08x\n", addr );
+							continue;
 						}
 
-						for ( int w = 0; w < cnt; w++ ) {
-							printf( "0x%04x: ", addr+(w*4) );
-							for ( int i = 0; i < 4; i++ ) {
-								printf( "%02x ", mem[addr+(w*4)+i] );
+						for ( int w = 0; w < cnt; w ++ ) {
+							printf( "0x%04x: ", addr + (w * 4) );
+							for ( int i = 0; i < 4; i ++ ) {
+								printf( "%02x ", mem[addr + (w * 4) + i] );
 							}
 							printf( "\n" );
 						}
@@ -823,29 +960,29 @@ void execute(uint8_t* mem, instr* imem, label_loc* labels, int label_count, bool
 			}
 		}
 		
-		int pc_next = pc + 4;
+		uint32_t pc_next = pc + 4;
 		switch (i.op) {
 			case ADD: rf[i.a1.reg] = rf[i.a2.reg] + rf[i.a3.reg]; break;
 			case SUB: rf[i.a1.reg] = rf[i.a2.reg] - rf[i.a3.reg]; break;
-			case SLT: rf[i.a1.reg] = (*(int32_t*)&rf[i.a2.reg]) < (*(int32_t*)&rf[i.a3.reg]) ? 1 : 0; break;
-			case SLTU: rf[i.a1.reg] = rf[i.a2.reg] + rf[i.a3.reg]; break;
+			case SLT: rf[i.a1.reg] = asSigned32(rf[i.a2.reg]) < asSigned32(rf[i.a3.reg]) ? 1 : 0; break;
+			case SLTU: rf[i.a1.reg] = rf[i.a2.reg] < rf[i.a3.reg] ? 1 : 0; break;
 			case AND: rf[i.a1.reg] = rf[i.a2.reg] & rf[i.a3.reg]; break;
 			case OR: rf[i.a1.reg] = rf[i.a2.reg] | rf[i.a3.reg]; break;
 			case XOR: rf[i.a1.reg] = rf[i.a2.reg] ^ rf[i.a3.reg]; break;
-			case SLL: rf[i.a1.reg] = rf[i.a2.reg] << rf[i.a3.reg]; break;
-			case SRL: rf[i.a1.reg] = rf[i.a2.reg] >> rf[i.a3.reg]; break;
-			case SRA: rf[i.a1.reg] = (*(int32_t*)&rf[i.a2.reg]) >> rf[i.a3.reg]; break;
+			case SLL: rf[i.a1.reg] = rf[i.a2.reg] << (rf[i.a3.reg] & 0x1f); break;
+			case SRL: rf[i.a1.reg] = rf[i.a2.reg] >> (rf[i.a3.reg] & 0x1f); break;
+			case SRA: rf[i.a1.reg] = arithmeticShiftRight(rf[i.a2.reg], rf[i.a3.reg]); break;
 
 
 			case ADDI: rf[i.a1.reg] = rf[i.a2.reg] + i.a3.imm; break;
-			case SLTI: rf[i.a1.reg] = (*(int32_t*)&rf[i.a2.reg]) < (*(int32_t*)&(i.a3.imm)) ? 1 : 0; break;
+			case SLTI: rf[i.a1.reg] = asSigned32(rf[i.a2.reg]) < asSigned32(i.a3.imm) ? 1 : 0; break;
 			case SLTIU: rf[i.a1.reg] = rf[i.a2.reg] < i.a3.imm ? 1 : 0; break;
 			case ANDI: rf[i.a1.reg] = rf[i.a2.reg] & i.a3.imm; break;
 			case ORI: rf[i.a1.reg] = rf[i.a2.reg] | i.a3.imm; break;
 			case XORI: rf[i.a1.reg] = rf[i.a2.reg] ^ i.a3.imm; break;
-			case SLLI: rf[i.a1.reg] = rf[i.a2.reg] << i.a3.imm; break;
-			case SRLI: rf[i.a1.reg] = rf[i.a2.reg] >> i.a3.imm; break;
-			case SRAI: rf[i.a1.reg] = (*(int32_t*)&rf[i.a2.reg]) >> i.a3.imm; break;
+			case SLLI: rf[i.a1.reg] = rf[i.a2.reg] << (i.a3.imm & 0x1f); break;
+			case SRLI: rf[i.a1.reg] = rf[i.a2.reg] >> (i.a3.imm & 0x1f); break;
+			case SRAI: rf[i.a1.reg] = arithmeticShiftRight(rf[i.a2.reg], i.a3.imm); break;
 
 			case LB:
 			case LBU: 
@@ -867,10 +1004,10 @@ void execute(uint8_t* mem, instr* imem, label_loc* labels, int label_count, bool
 			*/
 
 			case BEQ: if ( rf[i.a1.reg] == rf[i.a2.reg] ) pc_next = i.a3.imm; break;
-			case BGE: if ( *(int32_t*)&rf[i.a1.reg] >= *(int32_t*)&rf[i.a2.reg] ) pc_next = i.a3.imm; break;
+			case BGE: if ( asSigned32(rf[i.a1.reg]) >= asSigned32(rf[i.a2.reg]) ) pc_next = i.a3.imm; break;
 			case BGEU: if ( rf[i.a1.reg] >= rf[i.a2.reg] ) pc_next = i.a3.imm; 
 				break;
-			case BLT: if ( *(int32_t*)&rf[i.a1.reg] < *(int32_t*)&rf[i.a2.reg] ) pc_next = i.a3.imm; break;
+			case BLT: if ( asSigned32(rf[i.a1.reg]) < asSigned32(rf[i.a2.reg]) ) pc_next = i.a3.imm; break;
 			case BLTU: if ( rf[i.a1.reg] < rf[i.a2.reg] ) pc_next = i.a3.imm; break;
 			case BNE: if ( rf[i.a1.reg] != rf[i.a2.reg] ) pc_next = i.a3.imm; break;
 
@@ -879,11 +1016,13 @@ void execute(uint8_t* mem, instr* imem, label_loc* labels, int label_count, bool
 				pc_next = i.a2.imm;
 				//printf( "jal %d %x\n", pc+4, pc_next );
 				break;
-			case JALR:
+			case JALR: {
+				uint32_t jalrTarget = (rf[i.a2.reg] + i.a3.imm) & ~1u;
 				rf[i.a1.reg] = pc + 4;
-				pc_next = rf[i.a2.reg] + i.a3.imm;
+				pc_next = jalrTarget;
 				//printf( "jalr %d %d(%d)\n", i.a1.reg, i.a3.imm, i.a2.reg );
 				break;
+			}
 			case AUIPC:
 				rf[i.a1.reg] = pc + (i.a2.imm<<12);
 				//printf( "auipc %x \n", rf[i.a1.reg] );
@@ -911,7 +1050,7 @@ void execute(uint8_t* mem, instr* imem, label_loc* labels, int label_count, bool
 				dexit = true;
 				break;
 		}
-		pc = pc_next % MEM_BYTES;
+		pc = pc_next;
 		rf[0] = 0;// cleaner way to do this?
 		if ( stepping ) {
 			for ( int i = 0; i < 32; i++ ) {
@@ -950,7 +1089,7 @@ void normalize_labels(instr* imem, label_loc* labels, int label_count, source* s
 				}
 				case JAL:
 				int pc = (i*4);
-				int target = ii->a3.imm;
+				int target = ii->a2.imm;
 				int diff = pc - target;
 				if ( diff < 0 ) diff = -diff;
 
@@ -1013,24 +1152,40 @@ main(int argc, char** argv) {
 	//ProcessorState* ps = new ProcessorState();
 	
 	int memoff = 0;
-	uint8_t* mem = (uint8_t*)malloc(MEM_BYTES);
-	instr* imem = (instr*)malloc(DATA_OFFSET*sizeof(instr)/4);
-	label_loc* labels = (label_loc*)malloc(MAX_LABEL_COUNT*sizeof(label_loc));
+	uint8_t* mem = (uint8_t*)calloc(MEM_BYTES, sizeof(uint8_t));
+	instr* imem = new (std::nothrow) instr[DATA_OFFSET / 4];
+	label_loc* labels = new (std::nothrow) label_loc[MAX_LABEL_COUNT];
 	int label_count = 0;
 	source src;
 	src.offset = 0;
-	src.src = (char*)malloc(sizeof(char)*MAX_SRC_LEN);
+	src.src = (char*)calloc(MAX_SRC_LEN, sizeof(char));
 
 	if ( !mem || !labels || !imem || !src.src ) {
 		printf( "Memory allocation failed\n" );
 		exit(2);
 	}
 
-	for ( int i = 0; i < DATA_OFFSET/4; i++ ) {
+	for ( int i = 0; i < DATA_OFFSET / 4; i ++ ) {
 		imem[i].op = UNIMPL;
 		imem[i].a1.type = OPTYPE_NONE;
+		imem[i].a1.label[0] = '\0';
+		imem[i].a1.reg = 0;
+		imem[i].a1.imm = 0;
 		imem[i].a2.type = OPTYPE_NONE;
+		imem[i].a2.label[0] = '\0';
+		imem[i].a2.reg = 0;
+		imem[i].a2.imm = 0;
 		imem[i].a3.type = OPTYPE_NONE;
+		imem[i].a3.label[0] = '\0';
+		imem[i].a3.reg = 0;
+		imem[i].a3.imm = 0;
+		imem[i].psrc = NULL;
+		imem[i].orig_line = -1;
+		imem[i].breakpoint = false;
+	}
+	for ( int i = 0; i < MAX_LABEL_COUNT; i ++ ) {
+		labels[i].label[0] = '\0';
+		labels[i].loc = -1;
 	}
 
 	parse(fin, mem, imem, memoff, labels, label_count, &src);
@@ -1038,7 +1193,12 @@ main(int argc, char** argv) {
 	
 	execute(mem, imem, labels, label_count, start_immediate);
 
-	printf( "Execution done!\n" );
-	exit(0);
+	fclose(fin);
+	free(mem);
+	delete[] imem;
+	delete[] labels;
+	free(src.src);
 
+	printf( "Execution done!\n" );
+	return 0;
 }

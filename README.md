@@ -6,6 +6,19 @@ Build using `make`
 
 Run using `./obj/emulator [assembly file path]`
 
+## Testing
+
+Run the functional and boundary regression tests using `make test`.
+
+Run the same tests with AddressSanitizer and UndefinedBehaviorSanitizer using:
+
+```
+make test-asan
+make test-ubsan
+```
+
+Run the complete local validation sequence using `make check`. GitHub Actions runs the same three test targets for every push and pull request.
+
 ## Assembly Syntax
 
 Terms should be separated by whitespace! e.g., "add s0 s1 s2"
