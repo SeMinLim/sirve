@@ -1,52 +1,63 @@
-# rv32emulator
+# SIRVE
+* **SATA Interactive RISC-V Emulator — a compact, interactive RV32I assembly emulator and debugger developed by SATA Lab.**
+* `SIRVE` parses assembly source directly, expands common pseudo-instructions, models registers, memory, and cache behavior, and exposes the execution state through a command-line debugger.
 
-## Building and running
+## File structure
+```text
+sirve/
+├── emulator.cpp        assembly parser, execution engine, and debugger
+├── cachesim.cpp/.h     configurable cache model
+├── linenoise.hpp       interactive command-line input
+├── example_questions/  example RV32I assembly programs
+├── tests/              functional and boundary regression tests
+└── Makefile            build and local validation targets
+```
 
-Build using `make`
+## Prerequisites & Dependencies
+* GNU Make and G++ with C++11 support.
+* Bash for the regression-test script.
+* No external runtime library is required; `linenoise.hpp` is included.
 
-Run using `./obj/emulator [assembly file path]`
+## How to build and run
+* Build: `make`
+* Start interactive debugging: `./obj/emulator example_questions/reduction.s`
+* Run continuously without the debugger prompt: `./obj/emulator example_questions/reduction.s run`
+* Remove generated binaries: `make clean`
+
+`SIRVE` accepts RV32I assembly source rather than ELF executables or raw machine-code binaries.
+
+## Assembly support
+* RV32I integer arithmetic, logical operations, shifts, branches, jumps, upper immediates, and byte/halfword/word loads and stores.
+* Pseudo-instructions: `li`, `la`, `lla`, `nop`, `ret`, `jr`, `j`, `call`, `mv`, `bnez`, `beqz`, `bgt`, and `ble`.
+* Directives: `.text`, `.data`, `.byte`, `.half`, `.word`, and `.zero`.
+* `hcf` is a SIRVE-specific halt instruction that prints the register and cache state.
+
+Operands may be separated by whitespace or commas. Full-line comments begin with `#`.
+
+## Debugger commands
+| Command | Operation |
+|---|---|
+| `Enter`, `s`, `s<N>` | Execute one or `N` instructions |
+| `c` | Continue until termination or a breakpoint |
+| `r`, `r<register>` | Print all registers or one register, such as `rx5` or `rra` |
+| `m<address> [count]` | Print one or more 4-byte memory words |
+| `b`, `b<line>` | List breakpoints or add a source-line breakpoint |
+| `B<line>` | Remove a source-line breakpoint |
+| `l` | List parsed instructions and their source lines |
+| `q` | Quit the emulator |
 
 ## Testing
+* Functional and boundary regression tests: `make test`
+* AddressSanitizer regression tests: `make test-asan`
+* UndefinedBehaviorSanitizer regression tests: `make test-ubsan`
+* Complete local validation: `make check`
 
-Run the functional and boundary regression tests using `make test`.
+## Working examples
+* `example_questions/reduction.s`
+* `example_questions/sort.s`
+* `example_questions/graph.s`
+* `example_questions/sudoku.s`
 
-Run the same tests with AddressSanitizer and UndefinedBehaviorSanitizer using:
-
-```
-make test-asan
-make test-ubsan
-```
-
-Run the complete local validation sequence using `make check`. GitHub Actions runs the same three test targets for every push and pull request.
-
-## Assembly Syntax
-
-Terms should be separated by whitespace! e.g., "add s0 s1 s2"
-Commas and other delimiters are not support at the moment.
-
-## Debugging commands
-
-Execution will result in a command prompt, preceded by some information about the instruction to execute next.
-For example:
-
-```
-Next: lui x02, 0x00000010
-[inst:      1 pc:      0, src line    3] 
->> 
-```
-
-The following are the supported commands:
-
-* s, or [blank] : Step to the next instruction
-* c : Continue execution until termination
-* r : Reads the value of the registers. Both register number and alas formats can be used, without space after 'r'. e.g., `rx0`, `rra`. A simple `r` with no trailing register name will print all registers
-* m : Reads memory values. Memory address prefixed with m (e.g., `m0x1000` or `m1024`) will print four bytes starting from that address. If you want to read more values, give the number of bytes as a parameger. e.g., `m0x1000 16`.
-* b : Set breakpoint. e.g., `b17` to set a breakpoint at source code line 17. The list of existing breakpoints can be seen with a simple `b` with no suffixes. Breakpoints can be removed with an uppercase `B`. e.g., `B16`.
-* l : `l` with no arguments will print the compiled hardware instructions (after translating pseudo-instructions), each with its line number from the original source file.
-* q : `q` with no arguments will exit the emulator
-
-
-## Caveats
-
-* Pseudo-instructions are not elegantly compiled, yet
-* Only one action per line supported! For example, comments and labels shoud go on their own line
+## Notes
+* Maintained by Se-Min Lim.
+* `FENCE`, `ECALL`, `EBREAK`, privileged instructions, and ISA extensions are not currently implemented.
