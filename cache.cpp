@@ -1,4 +1,4 @@
-#include "cachesim.h"
+#include "cache.h"
 #include <stdlib.h>
 
 uint32_t g_cache[CACHE_SETS][CACHE_WAYS][CACHE_LINE_WORD] = {0};

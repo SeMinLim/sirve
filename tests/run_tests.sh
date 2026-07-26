@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EMULATOR="${1:-$ROOT_DIR/obj/emulator}"
+EMULATOR="${1:-$ROOT_DIR/obj/sirve}"
 ASM_DIR="$ROOT_DIR/tests/asm"
 TMP_DIR="$(mktemp -d)"
 

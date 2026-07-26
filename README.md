@@ -5,10 +5,10 @@
 ## File structure
 ```text
 sirve/
-├── emulator.cpp        assembly parser, execution engine, and debugger
-├── cachesim.cpp/.h     configurable cache model
+├── sirve.cpp           assembly parser, execution engine, and debugger
+├── cache.cpp/.h        configurable cache model
 ├── linenoise.hpp       interactive command-line input
-├── example_questions/  example RV32I assembly programs
+├── examples/           example RV32I assembly programs
 ├── tests/              functional and boundary regression tests
 └── Makefile            build and local validation targets
 ```
@@ -20,8 +20,8 @@ sirve/
 
 ## How to build and run
 * Build: `make`
-* Start interactive debugging: `./obj/emulator example_questions/reduction.s`
-* Run continuously without the debugger prompt: `./obj/emulator example_questions/reduction.s run`
+* Start interactive debugging: `./obj/sirve examples/reduction.s`
+* Run continuously without the debugger prompt: `./obj/sirve examples/reduction.s run`
 * Remove generated binaries: `make clean`
 
 `SIRVE` accepts RV32I assembly source rather than ELF executables or raw machine-code binaries.
@@ -53,10 +53,10 @@ Operands may be separated by whitespace or commas. Full-line comments begin with
 * Complete local validation: `make check`
 
 ## Working examples
-* `example_questions/reduction.s`
-* `example_questions/sort.s`
-* `example_questions/graph.s`
-* `example_questions/sudoku.s`
+* `examples/reduction.s`
+* `examples/sort.s`
+* `examples/graph.s`
+* `examples/sudoku.s`
 
 ## Notes
 * Maintained by Se-Min Lim.

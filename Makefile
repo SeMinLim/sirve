@@ -4,11 +4,11 @@ CXXFLAGS ?= -std=c++11 -g -Wall -Wextra -Wpedantic
 LDFLAGS ?=
 LDLIBS ?=
 
-SOURCES := cachesim.cpp emulator.cpp
-HEADERS := cachesim.h linenoise.hpp
-TARGET := obj/emulator
-ASAN_TARGET := obj/emulator-asan
-UBSAN_TARGET := obj/emulator-ubsan
+SOURCES := cache.cpp sirve.cpp
+HEADERS := cache.h linenoise.hpp
+TARGET := obj/sirve
+ASAN_TARGET := obj/sirve-asan
+UBSAN_TARGET := obj/sirve-ubsan
 TEST_SCRIPT := tests/run_tests.sh
 
 .PHONY: all clean test test-asan test-ubsan check

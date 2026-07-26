@@ -6,7 +6,7 @@
 #include <errno.h>
 #include <new>
 
-#include "cachesim.h"
+#include "cache.h"
 
 #include "linenoise.hpp"
 
