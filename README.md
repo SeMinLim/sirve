@@ -5,11 +5,13 @@
 ## File structure
 ```text
 sirve/
-├── sirve.cpp           assembly parser, execution engine, and debugger
-├── cache.cpp/.h        configurable cache model
-├── linenoise.hpp       interactive command-line input
+├── src/
+│   ├── sirve.cpp       assembly parser, execution engine, and debugger
+│   ├── rv32i.cpp/.h    RV32I machine-code decoder
+│   ├── cache.cpp/.h    configurable cache model
+│   └── linenoise.hpp   interactive command-line input
 ├── examples/           example RV32I assembly programs
-├── tests/              functional and boundary regression tests
+├── tests/              decoder, functional, and boundary tests
 └── Makefile            build and local validation targets
 ```
 
@@ -47,7 +49,7 @@ Operands may be separated by whitespace or commas. Full-line comments begin with
 | `q` | Quit the emulator |
 
 ## Testing
-* Functional and boundary regression tests: `make test`
+* Decoder, functional, and boundary regression tests: `make test`
 * AddressSanitizer regression tests: `make test-asan`
 * UndefinedBehaviorSanitizer regression tests: `make test-ubsan`
 * Complete local validation: `make check`
