@@ -1,7 +1,10 @@
 #ifndef SIRVE_RV32I_H
 #define SIRVE_RV32I_H
 
+#include <stddef.h>
 #include <stdint.h>
+
+#include "memory.h"
 
 
 typedef enum {
@@ -62,6 +65,36 @@ typedef struct {
 } DecodedInstr;
 
 
+typedef struct {
+	uint32_t reg[32];
+	uint32_t pc;
+	uint64_t instCnt;
+} ProcessorState;
+
+
+typedef enum {
+	RV32I_STEP_OK = 0,
+	RV32I_STEP_EBREAK,
+	RV32I_STEP_ECALL,
+	RV32I_STEP_ILLEGAL_INSTRUCTION,
+	RV32I_STEP_INSTRUCTION_MISALIGNED,
+	RV32I_STEP_INSTRUCTION_ACCESS_FAULT,
+	RV32I_STEP_LOAD_MISALIGNED,
+	RV32I_STEP_LOAD_ACCESS_FAULT,
+	RV32I_STEP_STORE_MISALIGNED,
+	RV32I_STEP_STORE_ACCESS_FAULT
+} RV32IStepStatus;
+
+
+typedef struct {
+	RV32IStepStatus status;
+	uint32_t pc;
+	uint32_t raw;
+	uint32_t faultAddr;
+	DecodedInstr instr;
+} RV32IStepResult;
+
+
 int32_t decodeImmediateI( uint32_t raw );
 int32_t decodeImmediateS( uint32_t raw );
 int32_t decodeImmediateB( uint32_t raw );
@@ -69,5 +102,13 @@ int32_t decodeImmediateU( uint32_t raw );
 int32_t decodeImmediateJ( uint32_t raw );
 
 bool decodeRV32I( uint32_t raw, DecodedInstr *instr );
+void initializeProcessorState( ProcessorState *state, uint32_t entryAddr );
+RV32IStepStatus stepRV32I(
+	ProcessorState *state,
+	Memory *memory,
+	RV32IStepResult *result
+);
+const char *rv32iInstrName( RV32IInstrType op );
+bool disassembleRV32I( uint32_t raw, char *buffer, size_t bufferSize );
 
 #endif

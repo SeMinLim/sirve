@@ -1,18 +1,20 @@
 # SIRVE
-* **SATA Interactive RISC-V Emulator — a compact, interactive RV32I assembly emulator and debugger developed by SATA Lab.**
-* `SIRVE` parses assembly source directly, expands common pseudo-instructions, models registers, memory, and cache behavior, and exposes the execution state through a command-line debugger.
+* **SATA Interactive RISC-V Emulator — a compact RV32I machine-code emulator, assembler, and debugger developed by SATA Lab.**
+* `SIRVE` assembles RV32I source into real 32-bit instruction words, stores them in emulated memory, and executes them through a fetch-decode-execute engine.
 
 ## File structure
 ```text
 sirve/
 ├── src/
-│   ├── sirve.cpp       assembly parser, execution engine, and debugger
-│   ├── rv32i.cpp/.h    RV32I machine-code decoder
-│   ├── cache.cpp/.h    configurable cache model
-│   └── linenoise.hpp   interactive command-line input
-├── examples/           example RV32I assembly programs
-├── tests/              decoder, functional, and boundary tests
-└── Makefile            build and local validation targets
+│   ├── sirve.cpp          CLI and interactive debugger
+│   ├── assembler.cpp/.h   two-pass parsing, label resolution, and RV32I encoding
+│   ├── rv32i.cpp/.h       machine-code decode and instruction execution
+│   ├── memory.cpp/.h      instruction fetch, data access, and MMIO
+│   ├── cache.cpp/.h       configurable data-cache model
+│   └── linenoise.hpp      interactive command-line input
+├── examples/              example RV32I assembly programs
+├── tests/                 assembler, decoder, execution, and boundary tests
+└── Makefile               build and local validation targets
 ```
 
 ## Prerequisites & Dependencies
@@ -23,18 +25,24 @@ sirve/
 ## How to build and run
 * Build: `make`
 * Start interactive debugging: `./obj/sirve examples/reduction.s`
-* Run continuously without the debugger prompt: `./obj/sirve examples/reduction.s run`
+* Run continuously: `./obj/sirve examples/reduction.s run`
 * Remove generated binaries: `make clean`
 
-`SIRVE` accepts RV32I assembly source rather than ELF executables or raw machine-code binaries.
+## Execution flow
+```text
+RV32I assembly -> two-pass assembler -> 32-bit machine code in memory
+                                      -> fetch -> decode -> execute
+```
+
+The execution engine reads each instruction word from memory; it does not execute an intermediate parsed-instruction representation.
 
 ## Assembly support
-* RV32I integer arithmetic, logical operations, shifts, branches, jumps, upper immediates, and byte/halfword/word loads and stores.
-* Pseudo-instructions: `li`, `la`, `lla`, `nop`, `ret`, `jr`, `j`, `call`, `mv`, `bnez`, `beqz`, `bgt`, and `ble`.
+* RV32I integer arithmetic, logical operations, shifts, branches, jumps, upper immediates, loads, stores, `FENCE`, `ECALL`, and `EBREAK`.
+* Pseudo-instructions: `li`, `la`, `lla`, `nop`, `ret`, `jr`, `j`, `call`, `mv`, `bnez`, `beqz`, `bgt`, `ble`, and `hcf`.
 * Directives: `.text`, `.data`, `.byte`, `.half`, `.word`, and `.zero`.
-* `hcf` is a SIRVE-specific halt instruction that prints the register and cache state.
+* `hcf` is encoded as the standard RV32I `EBREAK` instruction.
 
-Operands may be separated by whitespace or commas. Full-line comments begin with `#`.
+Operands may be separated by whitespace or commas. Comments begin with `#`.
 
 ## Debugger commands
 | Command | Operation |
@@ -45,13 +53,13 @@ Operands may be separated by whitespace or commas. Full-line comments begin with
 | `m<address> [count]` | Print one or more 4-byte memory words |
 | `b`, `b<line>` | List breakpoints or add a source-line breakpoint |
 | `B<line>` | Remove a source-line breakpoint |
-| `l` | List parsed instructions and their source lines |
+| `l` | List addresses, machine words, decoded instructions, and source lines |
 | `q` | Quit the emulator |
 
 ## Testing
-* Decoder, functional, and boundary regression tests: `make test`
-* AddressSanitizer regression tests: `make test-asan`
-* UndefinedBehaviorSanitizer regression tests: `make test-ubsan`
+* Decoder, assembler, execution, and boundary tests: `make test`
+* AddressSanitizer validation: `make test-asan`
+* UndefinedBehaviorSanitizer validation: `make test-ubsan`
 * Complete local validation: `make check`
 
 ## Working examples
@@ -62,4 +70,5 @@ Operands may be separated by whitespace or commas. Full-line comments begin with
 
 ## Notes
 * Maintained by Se-Min Lim.
-* `FENCE`, `ECALL`, `EBREAK`, privileged instructions, and ISA extensions are not currently implemented.
+* Raw binary and ELF32 loading are not yet implemented.
+* Privileged instructions, CSR instructions, interrupts, virtual memory, and ISA extensions are not currently supported.
