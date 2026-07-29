@@ -1,6 +1,6 @@
 # SIRVE
 * **SATA Interactive RISC-V Emulator — a compact RV32I machine-code emulator, assembler, loader, and debugger developed by SATA Lab.**
-* `SIRVE` executes real 32-bit RV32I instruction words produced by its two-pass assembler or loaded directly from a raw binary.
+* `SIRVE` executes real 32-bit RV32I instruction words produced by its assembler, loaded from a raw binary, or loaded from a static ELF32 executable.
 
 ## File structure
 ```text
@@ -8,7 +8,7 @@ sirve/
 ├── src/
 │   ├── sirve.cpp          CLI and interactive debugger
 │   ├── assembler.cpp/.h   two-pass parsing, label resolution, and RV32I encoding
-│   ├── loader.cpp/.h      raw binary loading and validation
+│   ├── loader.cpp/.h      raw binary and ELF32 loading
 │   ├── rv32i.cpp/.h       machine-code decode and instruction execution
 │   ├── memory.cpp/.h      instruction fetch, data access, and MMIO
 │   ├── cache.cpp/.h       configurable data-cache model
@@ -28,21 +28,23 @@ sirve/
 * Debug assembly: `./obj/sirve --asm examples/reduction.s`
 * Run assembly continuously: `./obj/sirve --asm examples/reduction.s run`
 * Run a raw binary: `./obj/sirve --bin program.bin --load 0x0 --entry 0x0 run`
+* Run an ELF32 executable: `./obj/sirve --elf program.elf run`
 * Remove generated binaries: `make clean`
 
-The legacy assembly form `./obj/sirve examples/reduction.s [run]` remains supported. Raw binaries are copied to `--load`; execution starts at `--entry`, which defaults to the load address.
+The legacy assembly form `./obj/sirve examples/reduction.s [run]` remains supported. Raw binaries use `--load` and `--entry`; ELF32 executables obtain their load addresses and entry point from the ELF program headers.
 
 ## Execution flow
 ```text
 RV32I assembly -> two-pass assembler ---┐
-                                        ├-> machine code in memory -> fetch -> decode -> execute
-Raw binary -----------------------------┘
+Raw binary -----------------------------├-> machine code in memory -> fetch -> decode -> execute
+ELF32 executable -> PT_LOAD segments ---┘
 ```
 
-## Assembly support
-* RV32I integer arithmetic, logical operations, shifts, branches, jumps, upper immediates, loads, stores, `FENCE`, `ECALL`, and `EBREAK`.
-* Pseudo-instructions: `li`, `la`, `lla`, `nop`, `ret`, `jr`, `j`, `call`, `mv`, `bnez`, `beqz`, `bgt`, `ble`, and `hcf`.
-* Directives: `.text`, `.data`, `.byte`, `.half`, `.word`, and `.zero`.
+## Input support
+* Assembly: RV32I instructions, common pseudo-instructions, and `.text`, `.data`, `.byte`, `.half`, `.word`, and `.zero` directives.
+* Raw binary: explicit load and entry addresses with bounds and alignment validation.
+* ELF32: little-endian static RISC-V executables, contiguous executable `PT_LOAD` regions, `.bss` zero initialization, and `e_entry` execution.
+* ELF32 mode initializes `sp` to `0x10000`, the top of the current 64-KB memory space.
 * `hcf` is encoded as the standard RV32I `EBREAK` instruction.
 
 Operands may be separated by whitespace or commas. Comments begin with `#`.
@@ -55,13 +57,13 @@ Operands may be separated by whitespace or commas. Comments begin with `#`.
 | `r`, `r<register>` | Print all registers or one register, such as `rx5` or `rra` |
 | `m<address> [count]` | Print one or more 4-byte memory words |
 | `b`, `b<line>` | List breakpoints or add a source-line breakpoint |
-| `ba<address>` | Add an address breakpoint, including for raw binaries |
+| `ba<address>` | Add an address breakpoint for any input mode |
 | `B<line>`, `Ba<address>` | Remove a source-line or address breakpoint |
 | `l` | List addresses, machine words, decoded instructions, and source lines |
 | `q` | Quit the emulator |
 
 ## Testing
-* Decoder, assembler, loader, execution, and boundary tests: `make test`
+* Decoder, assembler, raw-loader, ELF32-loader, execution, and boundary tests: `make test`
 * AddressSanitizer validation: `make test-asan`
 * UndefinedBehaviorSanitizer validation: `make test-ubsan`
 * Complete local validation: `make check`
@@ -74,5 +76,4 @@ Operands may be separated by whitespace or commas. Comments begin with `#`.
 
 ## Notes
 * Maintained by Se-Min Lim.
-* ELF32 loading is not yet implemented.
-* Privileged instructions, CSR instructions, interrupts, virtual memory, and ISA extensions are not currently supported.
+* Dynamic ELF, relocatable objects, shared libraries, thread-local storage, privileged instructions, CSR instructions, interrupts, virtual memory, and ISA extensions are not currently supported.

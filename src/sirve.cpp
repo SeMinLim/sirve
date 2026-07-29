@@ -23,7 +23,8 @@
 
 typedef enum {
 	INPUT_ASSEMBLY = 0,
-	INPUT_RAW_BINARY
+	INPUT_RAW_BINARY,
+	INPUT_ELF32
 } InputMode;
 
 
@@ -44,6 +45,7 @@ static void printUsage( const char *program ) {
 	printf( "  %s --bin <binary-file> [--load <address>] [--entry <address>] [run]\n",
 	        program
 	);
+	printf( "  %s --elf <elf32-file> [run]\n", program );
 	printf( "  %s <assembly-file> [run]\n", program );
 }
 
@@ -94,6 +96,14 @@ static bool parseCommandLine(
 			return false;
 		}
 		options->inputMode = INPUT_RAW_BINARY;
+		options->filename = argv[argIdx + 1];
+		argIdx += 2;
+	} else if ( strcmp(argv[argIdx], "--elf") == 0 ) {
+		if ( argIdx + 1 >= argc ) {
+			printf( "ELF32 filename is missing\n" );
+			return false;
+		}
+		options->inputMode = INPUT_ELF32;
 		options->filename = argv[argIdx + 1];
 		argIdx += 2;
 	} else {
@@ -658,7 +668,7 @@ int main( int argc, char **argv ) {
 		entryAddr = assemblerResult.entryAddr;
 		textStart = TEXT_OFFSET;
 		textEnd = assemblerResult.textEnd;
-	} else {
+	} else if ( options.inputMode == INPUT_RAW_BINARY ) {
 		printf( "Loading raw binary\n" );
 		RawBinaryResult loaderResult;
 		LoaderError loaderError;
@@ -674,6 +684,21 @@ int main( int argc, char **argv ) {
 		textEnd = loaderResult.loadedEnd;
 		executableStart = loaderResult.loadAddr;
 		executableLimit = loaderResult.loadedEnd;
+	} else {
+		printf( "Loading ELF32 executable\n" );
+		Elf32Result loaderResult;
+		LoaderError loaderError;
+		if ( !loadElf32(options.filename, data, MEM_BYTES, &loaderResult, &loaderError) ) {
+			printf( "%s\n", loaderError.message );
+			free(data);
+			delete[] sourceMap;
+			return 1;
+		}
+		entryAddr = loaderResult.entryAddr;
+		textStart = loaderResult.executableStart;
+		textEnd = loaderResult.executableLimit;
+		executableStart = loaderResult.executableStart;
+		executableLimit = loaderResult.executableLimit;
 	}
 
 	Memory memory;
@@ -687,6 +712,7 @@ int main( int argc, char **argv ) {
 
 	ProcessorState state;
 	initializeProcessorState(&state, entryAddr);
+	if ( options.inputMode == INPUT_ELF32 ) state.reg[2] = MEM_BYTES;
 	bool success = execute(&memory, &state, sourceMap, SOURCE_MAP_CNT,
 	                       textStart, textEnd, options.startImmediate);
 

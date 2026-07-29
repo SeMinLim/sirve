@@ -105,6 +105,27 @@ runRawBinaryTest() {
 	printPass "$testName"
 }
 
+runElf32Test() {
+	local testName="$1"
+	local elfFile="$2"
+	shift 2
+	local outputFile="$TMP_DIR/test-$TEST_CNT.log"
+
+	TEST_CNT=$((TEST_CNT + 1))
+	if ! runEmulator "$EMULATOR" --elf "$elfFile" run > "$outputFile" 2>&1; then
+		printFailure "$testName" "$outputFile"
+	fi
+
+	for expectedText in "$@"; do
+		if ! grep -Fq "$expectedText" "$outputFile"; then
+			printf "Missing expected output: %s\n" "$expectedText"
+			printFailure "$testName" "$outputFile"
+		fi
+	done
+
+	printPass "$testName"
+}
+
 printf '%s\n' "---------------------------------------------------------------------"
 printf '%s\n' "[STEP 1] Running RV32I functional regression tests."
 printf '%s\n' "---------------------------------------------------------------------"
@@ -170,6 +191,15 @@ printf '\x93\x00\x70\x00\x73\x00\x10\x00' > "$RAW_BINARY_FILE"
 runRawBinaryTest "Execute raw RV32I binary" \
 	"$RAW_BINARY_FILE" \
 	"x01:0x00000007" \
+	"Reached Halt and Catch Fire instruction!"
+
+runElf32Test "Execute RV32I ELF32 executable" \
+	"$ROOT_DIR/obj/test-rv32i.elf" \
+	"Loading ELF32 executable" \
+	"x01:0x00000007" \
+	"x02:0x00010000" \
+	"x03:0x12345678" \
+	"x04:0x00000000" \
 	"Reached Halt and Catch Fire instruction!"
 
 printf '%s\n' "---------------------------------------------------------------------"

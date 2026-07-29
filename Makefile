@@ -15,14 +15,17 @@ DECODE_TEST_TARGET := obj/rv32i_decode_test
 ASSEMBLER_TEST_TARGET := obj/assembler_test
 EXECUTE_TEST_TARGET := obj/rv32i_execute_test
 LOADER_TEST_TARGET := obj/loader_test
+ELF_LOADER_TEST_TARGET := obj/elf_loader_test
 ASAN_DECODE_TEST_TARGET := obj/rv32i_decode_test-asan
 ASAN_ASSEMBLER_TEST_TARGET := obj/assembler_test-asan
 ASAN_EXECUTE_TEST_TARGET := obj/rv32i_execute_test-asan
 ASAN_LOADER_TEST_TARGET := obj/loader_test-asan
+ASAN_ELF_LOADER_TEST_TARGET := obj/elf_loader_test-asan
 UBSAN_DECODE_TEST_TARGET := obj/rv32i_decode_test-ubsan
 UBSAN_ASSEMBLER_TEST_TARGET := obj/assembler_test-ubsan
 UBSAN_EXECUTE_TEST_TARGET := obj/rv32i_execute_test-ubsan
 UBSAN_LOADER_TEST_TARGET := obj/loader_test-ubsan
+UBSAN_ELF_LOADER_TEST_TARGET := obj/elf_loader_test-ubsan
 TEST_SCRIPT := tests/run_tests.sh
 
 .PHONY: all clean test test-asan test-ubsan check
@@ -59,6 +62,12 @@ $(LOADER_TEST_TARGET): tests/loader_test.cpp src/loader.cpp src/loader.h src/mem
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/loader_test.cpp src/loader.cpp src/memory.cpp src/cache.cpp \
 		$(LDFLAGS) $(LDLIBS) -o $@
 
+$(ELF_LOADER_TEST_TARGET): tests/elf_loader_test.cpp src/loader.cpp src/loader.h \
+                          src/rv32i.cpp src/rv32i.h src/memory.cpp src/memory.h \
+                          src/cache.cpp src/cache.h | obj
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/elf_loader_test.cpp src/loader.cpp src/rv32i.cpp \
+		src/memory.cpp src/cache.cpp $(LDFLAGS) $(LDLIBS) -o $@
+
 $(ASAN_DECODE_TEST_TARGET): tests/rv32i_decode_test.cpp src/rv32i.cpp src/memory.cpp src/cache.cpp | obj
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -fsanitize=address -fno-omit-frame-pointer \
 		tests/rv32i_decode_test.cpp src/rv32i.cpp src/memory.cpp src/cache.cpp \
@@ -77,6 +86,12 @@ $(ASAN_EXECUTE_TEST_TARGET): tests/rv32i_execute_test.cpp src/rv32i.cpp src/memo
 $(ASAN_LOADER_TEST_TARGET): tests/loader_test.cpp src/loader.cpp src/memory.cpp src/cache.cpp | obj
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -fsanitize=address -fno-omit-frame-pointer \
 		tests/loader_test.cpp src/loader.cpp src/memory.cpp src/cache.cpp \
+		$(LDFLAGS) -fsanitize=address $(LDLIBS) -o $@
+
+$(ASAN_ELF_LOADER_TEST_TARGET): tests/elf_loader_test.cpp src/loader.cpp src/rv32i.cpp \
+                               src/memory.cpp src/cache.cpp | obj
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -fsanitize=address -fno-omit-frame-pointer \
+		tests/elf_loader_test.cpp src/loader.cpp src/rv32i.cpp src/memory.cpp src/cache.cpp \
 		$(LDFLAGS) -fsanitize=address $(LDLIBS) -o $@
 
 $(UBSAN_DECODE_TEST_TARGET): tests/rv32i_decode_test.cpp src/rv32i.cpp src/memory.cpp src/cache.cpp | obj
@@ -99,25 +114,39 @@ $(UBSAN_LOADER_TEST_TARGET): tests/loader_test.cpp src/loader.cpp src/memory.cpp
 		tests/loader_test.cpp src/loader.cpp src/memory.cpp src/cache.cpp \
 		$(LDFLAGS) -fsanitize=undefined $(LDLIBS) -o $@
 
-test: $(TARGET) $(DECODE_TEST_TARGET) $(ASSEMBLER_TEST_TARGET) $(EXECUTE_TEST_TARGET) $(LOADER_TEST_TARGET)
+$(UBSAN_ELF_LOADER_TEST_TARGET): tests/elf_loader_test.cpp src/loader.cpp src/rv32i.cpp \
+                                src/memory.cpp src/cache.cpp | obj
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -fsanitize=undefined -fno-sanitize-recover=undefined \
+		tests/elf_loader_test.cpp src/loader.cpp src/rv32i.cpp src/memory.cpp src/cache.cpp \
+		$(LDFLAGS) -fsanitize=undefined $(LDLIBS) -o $@
+
+test: $(TARGET) $(DECODE_TEST_TARGET) $(ASSEMBLER_TEST_TARGET) $(EXECUTE_TEST_TARGET) \
+      $(LOADER_TEST_TARGET) $(ELF_LOADER_TEST_TARGET)
 	$(DECODE_TEST_TARGET)
 	$(ASSEMBLER_TEST_TARGET)
 	$(EXECUTE_TEST_TARGET)
 	$(LOADER_TEST_TARGET)
+	$(ELF_LOADER_TEST_TARGET)
 	$(TEST_SCRIPT) $(TARGET)
 
-test-asan: $(ASAN_TARGET) $(ASAN_DECODE_TEST_TARGET) $(ASAN_ASSEMBLER_TEST_TARGET) $(ASAN_EXECUTE_TEST_TARGET) $(ASAN_LOADER_TEST_TARGET)
+test-asan: $(ASAN_TARGET) $(ASAN_DECODE_TEST_TARGET) $(ASAN_ASSEMBLER_TEST_TARGET) \
+           $(ASAN_EXECUTE_TEST_TARGET) $(ASAN_LOADER_TEST_TARGET) \
+           $(ASAN_ELF_LOADER_TEST_TARGET)
 	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 $(ASAN_DECODE_TEST_TARGET)
 	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 $(ASAN_ASSEMBLER_TEST_TARGET)
 	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 $(ASAN_EXECUTE_TEST_TARGET)
 	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 $(ASAN_LOADER_TEST_TARGET)
+	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 $(ASAN_ELF_LOADER_TEST_TARGET)
 	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 $(TEST_SCRIPT) $(ASAN_TARGET)
 
-test-ubsan: $(UBSAN_TARGET) $(UBSAN_DECODE_TEST_TARGET) $(UBSAN_ASSEMBLER_TEST_TARGET) $(UBSAN_EXECUTE_TEST_TARGET) $(UBSAN_LOADER_TEST_TARGET)
+test-ubsan: $(UBSAN_TARGET) $(UBSAN_DECODE_TEST_TARGET) $(UBSAN_ASSEMBLER_TEST_TARGET) \
+            $(UBSAN_EXECUTE_TEST_TARGET) $(UBSAN_LOADER_TEST_TARGET) \
+            $(UBSAN_ELF_LOADER_TEST_TARGET)
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 $(UBSAN_DECODE_TEST_TARGET)
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 $(UBSAN_ASSEMBLER_TEST_TARGET)
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 $(UBSAN_EXECUTE_TEST_TARGET)
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 $(UBSAN_LOADER_TEST_TARGET)
+	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 $(UBSAN_ELF_LOADER_TEST_TARGET)
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 $(TEST_SCRIPT) $(UBSAN_TARGET)
 
 check:
