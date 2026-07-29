@@ -10,6 +10,7 @@
 
 #include "assembler.h"
 #include "linenoise.hpp"
+#include "loader.h"
 #include "memory.h"
 #include "rv32i.h"
 
@@ -17,8 +18,34 @@
 #define MEM_BYTES 0x10000
 #define TEXT_OFFSET 0x0000
 #define DATA_OFFSET 0x8000
-#define SOURCE_MAP_CNT (DATA_OFFSET / 4)
+#define SOURCE_MAP_CNT (MEM_BYTES / 4)
 
+
+typedef enum {
+	INPUT_ASSEMBLY = 0,
+	INPUT_RAW_BINARY
+} InputMode;
+
+
+typedef struct {
+	InputMode inputMode;
+	const char *filename;
+	uint32_t loadAddr;
+	uint32_t entryAddr;
+	bool loadAddrSet;
+	bool entryAddrSet;
+	bool startImmediate;
+} CommandLineOptions;
+
+
+static void printUsage( const char *program ) {
+	printf( "usage:\n" );
+	printf( "  %s --asm <assembly-file> [run]\n", program );
+	printf( "  %s --bin <binary-file> [--load <address>] [--entry <address>] [run]\n",
+	        program
+	);
+	printf( "  %s <assembly-file> [run]\n", program );
+}
 
 static void printRegFile( const uint32_t reg[32] ) {
 	for ( int i = 0; i < 32; i ++ ) {
@@ -40,6 +67,87 @@ static bool parseNumber( const char *text, uint32_t *value ) {
 		return false;
 	}
 	*value = (uint32_t)parsed;
+	return true;
+}
+
+static bool parseCommandLine(
+	int argc,
+	char **argv,
+	CommandLineOptions *options
+) {
+	if ( argc < 2 || options == NULL ) return false;
+	memset(options, 0, sizeof(*options));
+	options->inputMode = INPUT_ASSEMBLY;
+
+	int argIdx = 1;
+	if ( strcmp(argv[argIdx], "--asm") == 0 ) {
+		if ( argIdx + 1 >= argc ) {
+			printf( "Assembly filename is missing\n" );
+			return false;
+		}
+		options->inputMode = INPUT_ASSEMBLY;
+		options->filename = argv[argIdx + 1];
+		argIdx += 2;
+	} else if ( strcmp(argv[argIdx], "--bin") == 0 ) {
+		if ( argIdx + 1 >= argc ) {
+			printf( "Raw binary filename is missing\n" );
+			return false;
+		}
+		options->inputMode = INPUT_RAW_BINARY;
+		options->filename = argv[argIdx + 1];
+		argIdx += 2;
+	} else {
+		options->inputMode = INPUT_ASSEMBLY;
+		options->filename = argv[argIdx];
+		argIdx ++;
+	}
+
+	while ( argIdx < argc ) {
+		if ( strcmp(argv[argIdx], "run") == 0 ) {
+			if ( options->startImmediate ) {
+				printf( "Duplicate run option\n" );
+				return false;
+			}
+			options->startImmediate = true;
+			argIdx ++;
+			continue;
+		}
+		if ( strcmp(argv[argIdx], "--load") == 0 ) {
+			if ( options->inputMode != INPUT_RAW_BINARY ) {
+				printf( "--load is only valid with --bin\n" );
+				return false;
+			}
+			if ( options->loadAddrSet || argIdx + 1 >= argc ||
+			     !parseNumber(argv[argIdx + 1], &options->loadAddr) ) {
+				printf( "Malformed raw binary load address\n" );
+				return false;
+			}
+			options->loadAddrSet = true;
+			argIdx += 2;
+			continue;
+		}
+		if ( strcmp(argv[argIdx], "--entry") == 0 ) {
+			if ( options->inputMode != INPUT_RAW_BINARY ) {
+				printf( "--entry is only valid with --bin\n" );
+				return false;
+			}
+			if ( options->entryAddrSet || argIdx + 1 >= argc ||
+			     !parseNumber(argv[argIdx + 1], &options->entryAddr) ) {
+				printf( "Malformed raw binary entry address\n" );
+				return false;
+			}
+			options->entryAddrSet = true;
+			argIdx += 2;
+			continue;
+		}
+
+		printf( "Unknown command-line option: %s\n", argv[argIdx] );
+		return false;
+	}
+
+	if ( options->inputMode == INPUT_RAW_BINARY && !options->entryAddrSet ) {
+		options->entryAddr = options->loadAddr;
+	}
 	return true;
 }
 
@@ -65,6 +173,17 @@ static int parseRegisterName( const char *text ) {
 	}
 	if ( strcmp(text, "fp") == 0 ) return 8;
 	return -1;
+}
+
+static void initializeSourceMap(
+	AssemblerSourceEntry *sourceMap,
+	uint32_t sourceMapCnt
+) {
+	if ( sourceMap == NULL ) return;
+	for ( uint32_t i = 0; i < sourceMapCnt; i ++ ) {
+		sourceMap[i].line = -1;
+		sourceMap[i].text[0] = '\0';
+	}
 }
 
 static int getSourceLine(
@@ -104,11 +223,14 @@ static void listInstructions(
 	const Memory *memory,
 	const AssemblerSourceEntry *sourceMap,
 	uint32_t sourceMapCnt,
+	uint32_t textStart,
 	uint32_t textEnd
 ) {
 	printf( "Address    Raw        Source  Instruction\n" );
 	printf( "---------------------------------------------------------------\n" );
-	for ( uint32_t addr = 0; addr < textEnd; addr += 4 ) {
+	if ( textEnd <= textStart || textEnd - textStart < 4 ) return;
+
+	for ( uint32_t addr = textStart; addr <= textEnd - 4; addr += 4 ) {
 		uint32_t raw = 0;
 		if ( memoryFetch32(memory, addr, &raw) != MEMORY_STATUS_OK ) break;
 
@@ -134,19 +256,23 @@ static void listInstructions(
 static void listBreakpoints(
 	const bool *breakpoints,
 	const AssemblerSourceEntry *sourceMap,
-	uint32_t sourceMapCnt
+	uint32_t breakpointCnt
 ) {
-	for ( uint32_t i = 0; i < sourceMapCnt; i ++ ) {
+	for ( uint32_t i = 0; i < breakpointCnt; i ++ ) {
 		if ( !breakpoints[i] ) continue;
-		printf( "Break at address 0x%08x, line %d: %s\n",
-		        i * 4,
-		        sourceMap[i].line,
-		        sourceMap[i].text
-		);
+		if ( sourceMap != NULL && sourceMap[i].line >= 0 ) {
+			printf( "Break at address 0x%08x, line %d: %s\n",
+			        i * 4,
+			        sourceMap[i].line,
+			        sourceMap[i].text
+			);
+		} else {
+			printf( "Break at address 0x%08x\n", i * 4 );
+		}
 	}
 }
 
-static bool addBreakpoint(
+static bool addSourceBreakpoint(
 	bool *breakpoints,
 	const AssemblerSourceEntry *sourceMap,
 	uint32_t sourceMapCnt,
@@ -163,7 +289,7 @@ static bool addBreakpoint(
 	return false;
 }
 
-static bool removeBreakpoint(
+static bool removeSourceBreakpoint(
 	bool *breakpoints,
 	const AssemblerSourceEntry *sourceMap,
 	uint32_t sourceMapCnt,
@@ -179,6 +305,46 @@ static bool removeBreakpoint(
 	if ( removed ) printf( "Break point removed from line %u\n", sourceLine );
 	else printf( "No breakpoint found at line %u\n", sourceLine );
 	return removed;
+}
+
+static bool addressInExecutableRange(
+	uint32_t addr,
+	uint32_t textStart,
+	uint32_t textEnd
+) {
+	if ( (addr & 0x3u) != 0 ) return false;
+	if ( textEnd <= textStart || textEnd - textStart < 4 ) return false;
+	return addr >= textStart && addr <= textEnd - 4;
+}
+
+static bool addAddressBreakpoint(
+	bool *breakpoints,
+	uint32_t breakpointCnt,
+	uint32_t textStart,
+	uint32_t textEnd,
+	uint32_t addr
+) {
+	if ( !addressInExecutableRange(addr, textStart, textEnd) || addr / 4 >= breakpointCnt ) {
+		printf( "Invalid breakpoint address: 0x%08x\n", addr );
+		return false;
+	}
+	breakpoints[addr / 4] = true;
+	printf( "Break point added to address 0x%08x\n", addr );
+	return true;
+}
+
+static bool removeAddressBreakpoint(
+	bool *breakpoints,
+	uint32_t breakpointCnt,
+	uint32_t addr
+) {
+	if ( (addr & 0x3u) != 0 || addr / 4 >= breakpointCnt || !breakpoints[addr / 4] ) {
+		printf( "No breakpoint found at address 0x%08x\n", addr );
+		return false;
+	}
+	breakpoints[addr / 4] = false;
+	printf( "Break point removed from address 0x%08x\n", addr );
+	return true;
 }
 
 static void inspectMemory( const Memory *memory, char *command ) {
@@ -227,6 +393,7 @@ static bool handleDebugger(
 	const Memory *memory,
 	const AssemblerSourceEntry *sourceMap,
 	uint32_t sourceMapCnt,
+	uint32_t textStart,
 	uint32_t textEnd,
 	bool *breakpoints,
 	bool *continuous,
@@ -288,26 +455,39 @@ static bool handleDebugger(
 			continue;
 		}
 		if ( command[0] == 'b' ) {
-			uint32_t sourceLine = 0;
-			if ( command[1] == '\0' ) listBreakpoints(breakpoints, sourceMap, sourceMapCnt);
-			else if ( parseNumber(command + 1, &sourceLine) ) {
-				addBreakpoint(breakpoints, sourceMap, sourceMapCnt, sourceLine);
+			uint32_t value = 0;
+			if ( command[1] == '\0' ) {
+				listBreakpoints(breakpoints, sourceMap, sourceMapCnt);
+			} else if ( command[1] == 'a' ) {
+				if ( parseNumber(command + 2, &value) ) {
+					addAddressBreakpoint(breakpoints, sourceMapCnt, textStart, textEnd, value);
+				} else {
+					printf( "Malformed breakpoint address\n" );
+				}
+			} else if ( parseNumber(command + 1, &value) ) {
+				addSourceBreakpoint(breakpoints, sourceMap, sourceMapCnt, value);
 			} else {
 				printf( "Malformed breakpoint line\n" );
 			}
 			continue;
 		}
 		if ( command[0] == 'B' ) {
-			uint32_t sourceLine = 0;
-			if ( parseNumber(command + 1, &sourceLine) ) {
-				removeBreakpoint(breakpoints, sourceMap, sourceMapCnt, sourceLine);
+			uint32_t value = 0;
+			if ( command[1] == 'a' ) {
+				if ( parseNumber(command + 2, &value) ) {
+					removeAddressBreakpoint(breakpoints, sourceMapCnt, value);
+				} else {
+					printf( "Malformed breakpoint address\n" );
+				}
+			} else if ( parseNumber(command + 1, &value) ) {
+				removeSourceBreakpoint(breakpoints, sourceMap, sourceMapCnt, value);
 			} else {
 				printf( "Malformed breakpoint line\n" );
 			}
 			continue;
 		}
 		if ( command[0] == 'l' ) {
-			listInstructions(memory, sourceMap, sourceMapCnt, textEnd);
+			listInstructions(memory, sourceMap, sourceMapCnt, textStart, textEnd);
 			continue;
 		}
 
@@ -357,6 +537,7 @@ static bool execute(
 	ProcessorState *state,
 	const AssemblerSourceEntry *sourceMap,
 	uint32_t sourceMapCnt,
+	uint32_t textStart,
 	uint32_t textEnd,
 	bool startImmediate
 ) {
@@ -377,7 +558,7 @@ static bool execute(
 		uint32_t index = state->pc / 4;
 		bool atBreakpoint = index < sourceMapCnt && breakpoints[index];
 		if ( atBreakpoint || promptOnNext ) {
-			if ( !handleDebugger(state, memory, sourceMap, sourceMapCnt, textEnd,
+			if ( !handleDebugger(state, memory, sourceMap, sourceMapCnt, textStart, textEnd,
 			                    breakpoints, &continuous, &stepCnt) ) {
 				delete[] breakpoints;
 				return true;
@@ -434,12 +615,12 @@ static bool execute(
 
 
 int main( int argc, char **argv ) {
-	if ( argc < 2 ) {
-		printf( "usage: %s asmfile [run]\n", argv[0] );
+	CommandLineOptions options;
+	if ( !parseCommandLine(argc, argv, &options) ) {
+		printUsage(argv[0]);
 		return 1;
 	}
 
-	bool startImmediate = argc >= 3;
 	uint8_t *data = (uint8_t*)calloc(MEM_BYTES, sizeof(uint8_t));
 	AssemblerSourceEntry *sourceMap = new (std::nothrow) AssemblerSourceEntry[SOURCE_MAP_CNT];
 	if ( data == NULL || sourceMap == NULL ) {
@@ -448,32 +629,66 @@ int main( int argc, char **argv ) {
 		delete[] sourceMap;
 		return 2;
 	}
+	initializeSourceMap(sourceMap, SOURCE_MAP_CNT);
 
-	printf( "Assembling input file\n" );
-	AssemblerResult assemblerResult;
-	AssemblerError assemblerError;
-	if ( !assembleRV32I(argv[1], data, MEM_BYTES, TEXT_OFFSET, DATA_OFFSET,
-	                    &assemblerResult, &assemblerError, sourceMap, SOURCE_MAP_CNT) ) {
-		if ( assemblerError.line > 0 ) {
-			printf( "Line %4d: Syntax error! %s\n",
-			        assemblerError.line,
-			        assemblerError.message
-			);
-		} else {
-			printf( "%s\n", assemblerError.message );
+	uint32_t entryAddr = 0;
+	uint32_t textStart = 0;
+	uint32_t textEnd = 0;
+	uint32_t executableStart = 0;
+	uint32_t executableLimit = DATA_OFFSET;
+
+	if ( options.inputMode == INPUT_ASSEMBLY ) {
+		printf( "Assembling input file\n" );
+		AssemblerResult assemblerResult;
+		AssemblerError assemblerError;
+		if ( !assembleRV32I(options.filename, data, MEM_BYTES, TEXT_OFFSET, DATA_OFFSET,
+		                    &assemblerResult, &assemblerError, sourceMap, SOURCE_MAP_CNT) ) {
+			if ( assemblerError.line > 0 ) {
+				printf( "Line %4d: Syntax error! %s\n",
+				        assemblerError.line,
+				        assemblerError.message
+				);
+			} else {
+				printf( "%s\n", assemblerError.message );
+			}
+			free(data);
+			delete[] sourceMap;
+			return 1;
 		}
+		entryAddr = assemblerResult.entryAddr;
+		textStart = TEXT_OFFSET;
+		textEnd = assemblerResult.textEnd;
+	} else {
+		printf( "Loading raw binary\n" );
+		RawBinaryResult loaderResult;
+		LoaderError loaderError;
+		if ( !loadRawBinary(options.filename, data, MEM_BYTES, options.loadAddr,
+		                    options.entryAddr, &loaderResult, &loaderError) ) {
+			printf( "%s\n", loaderError.message );
+			free(data);
+			delete[] sourceMap;
+			return 1;
+		}
+		entryAddr = loaderResult.entryAddr;
+		textStart = loaderResult.loadAddr;
+		textEnd = loaderResult.loadedEnd;
+		executableStart = loaderResult.loadAddr;
+		executableLimit = loaderResult.loadedEnd;
+	}
+
+	Memory memory;
+	initializeMemory(&memory, data, MEM_BYTES, executableLimit);
+	if ( !setMemoryExecutableRange(&memory, executableStart, executableLimit) ) {
+		printf( "Invalid executable memory range\n" );
 		free(data);
 		delete[] sourceMap;
 		return 1;
 	}
 
-	Memory memory;
-	initializeMemory(&memory, data, MEM_BYTES, DATA_OFFSET);
-
 	ProcessorState state;
-	initializeProcessorState(&state, assemblerResult.entryAddr);
+	initializeProcessorState(&state, entryAddr);
 	bool success = execute(&memory, &state, sourceMap, SOURCE_MAP_CNT,
-	                       assemblerResult.textEnd, startImmediate);
+	                       textStart, textEnd, options.startImmediate);
 
 	free(data);
 	delete[] sourceMap;

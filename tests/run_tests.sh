@@ -83,6 +83,28 @@ runFailureTest() {
 	printPass "$testName"
 }
 
+runRawBinaryTest() {
+	local testName="$1"
+	local binaryFile="$2"
+	shift 2
+	local outputFile="$TMP_DIR/test-$TEST_CNT.log"
+
+	TEST_CNT=$((TEST_CNT + 1))
+	if ! runEmulator "$EMULATOR" --bin "$binaryFile" \
+		--load 0x100 --entry 0x100 run > "$outputFile" 2>&1; then
+		printFailure "$testName" "$outputFile"
+	fi
+
+	for expectedText in "$@"; do
+		if ! grep -Fq "$expectedText" "$outputFile"; then
+			printf "Missing expected output: %s\n" "$expectedText"
+			printFailure "$testName" "$outputFile"
+		fi
+	done
+
+	printPass "$testName"
+}
+
 printf '%s\n' "---------------------------------------------------------------------"
 printf '%s\n' "[STEP 1] Running RV32I functional regression tests."
 printf '%s\n' "---------------------------------------------------------------------"
@@ -141,6 +163,13 @@ runSuccessTest "Aligned accesses at the memory boundary" \
 
 runSuccessTest "Exact data-segment boundary" \
 	"$ASM_DIR/data_boundary.s" \
+	"Reached Halt and Catch Fire instruction!"
+
+RAW_BINARY_FILE="$TMP_DIR/raw-rv32i.bin"
+printf '\x93\x00\x70\x00\x73\x00\x10\x00' > "$RAW_BINARY_FILE"
+runRawBinaryTest "Execute raw RV32I binary" \
+	"$RAW_BINARY_FILE" \
+	"x01:0x00000007" \
 	"Reached Halt and Catch Fire instruction!"
 
 printf '%s\n' "---------------------------------------------------------------------"

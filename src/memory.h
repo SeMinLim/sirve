@@ -14,6 +14,7 @@ typedef enum {
 typedef struct {
 	uint8_t *data;
 	uint32_t size;
+	uint32_t executableStart;
 	uint32_t executableLimit;
 	uint64_t readReqCnt;
 	uint64_t writeReqCnt;
@@ -27,6 +28,11 @@ void initializeMemory(
 	Memory *memory,
 	uint8_t *data,
 	uint32_t size,
+	uint32_t executableLimit
+);
+bool setMemoryExecutableRange(
+	Memory *memory,
+	uint32_t executableStart,
 	uint32_t executableLimit
 );
 

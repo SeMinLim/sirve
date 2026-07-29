@@ -102,7 +102,8 @@ void initializeMemory(
 
 	memory->data = data;
 	memory->size = size;
-	memory->executableLimit = executableLimit;
+	memory->executableStart = 0;
+	memory->executableLimit = executableLimit <= size ? executableLimit : size;
 	memory->readReqCnt = 0;
 	memory->writeReqCnt = 0;
 	memory->readHitCnt = 0;
@@ -111,12 +112,28 @@ void initializeMemory(
 	cacheReset();
 }
 
+bool setMemoryExecutableRange(
+	Memory *memory,
+	uint32_t executableStart,
+	uint32_t executableLimit
+) {
+	if ( memory == NULL || memory->data == NULL ) return false;
+	if ( (executableStart & 0x3u) != 0 ) return false;
+	if ( executableStart >= executableLimit || executableLimit > memory->size ) return false;
+	if ( executableLimit - executableStart < 4 ) return false;
+
+	memory->executableStart = executableStart;
+	memory->executableLimit = executableLimit;
+	return true;
+}
+
 MemoryStatus memoryFetch32( const Memory *memory, uint32_t addr, uint32_t *data ) {
 	if ( data == NULL || memory == NULL || memory->data == NULL ) {
 		return MEMORY_STATUS_OUT_OF_BOUNDS;
 	}
 	if ( (addr & 0x3u) != 0 ) return MEMORY_STATUS_MISALIGNED;
-	if ( addr >= memory->executableLimit || 4 > memory->executableLimit - addr ) {
+	if ( addr < memory->executableStart || addr >= memory->executableLimit ||
+	     4 > memory->executableLimit - addr ) {
 		return MEMORY_STATUS_OUT_OF_BOUNDS;
 	}
 
