@@ -14,13 +14,14 @@ sirve/
 │   ├── cache.cpp/.h       configurable data-cache model
 │   └── linenoise.hpp      interactive command-line input
 ├── examples/              example RV32I assembly programs
-├── tests/                 assembler, decoder, loader, execution, and boundary tests
+├── tests/                 regression tests and a freestanding RV32I C program
 └── Makefile               build and local validation targets
 ```
 
 ## Prerequisites & Dependencies
 * GNU Make and G++ with C++11 support.
-* Bash for the regression-test script.
+* Bash for the regression-test scripts.
+* GNU RISC-V bare-metal GCC for the freestanding C/ELF32 test. Supported compiler names are `riscv64-unknown-elf-gcc`, `riscv-none-elf-gcc`, and `riscv32-unknown-elf-gcc`.
 * No external runtime library is required; `linenoise.hpp` is included.
 
 ## How to build and run
@@ -29,6 +30,7 @@ sirve/
 * Run assembly continuously: `./obj/sirve --asm examples/reduction.s run`
 * Run a raw binary: `./obj/sirve --bin program.bin --load 0x0 --entry 0x0 run`
 * Run an ELF32 executable: `./obj/sirve --elf program.elf run`
+* Build and execute the freestanding C test: `make test-toolchain`
 * Remove generated binaries: `make clean`
 
 The legacy assembly form `./obj/sirve examples/reduction.s [run]` remains supported. Raw binaries use `--load` and `--entry`; ELF32 executables obtain their load addresses and entry point from the ELF program headers.
@@ -64,9 +66,10 @@ Operands may be separated by whitespace or commas. Comments begin with `#`.
 
 ## Testing
 * Decoder, assembler, raw-loader, ELF32-loader, execution, and boundary tests: `make test`
+* GNU GCC-generated freestanding C/ELF32 test: `make test-toolchain`
 * AddressSanitizer validation: `make test-asan`
 * UndefinedBehaviorSanitizer validation: `make test-ubsan`
-* Complete local validation: `make check`
+* Complete local validation, including the GNU toolchain test: `make check`
 
 ## Working examples
 * `examples/reduction.s`

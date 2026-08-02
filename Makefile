@@ -27,8 +27,10 @@ UBSAN_EXECUTE_TEST_TARGET := obj/rv32i_execute_test-ubsan
 UBSAN_LOADER_TEST_TARGET := obj/loader_test-ubsan
 UBSAN_ELF_LOADER_TEST_TARGET := obj/elf_loader_test-ubsan
 TEST_SCRIPT := tests/run_tests.sh
+TOOLCHAIN_TEST_SCRIPT := tests/run_gnu_toolchain_test.sh
+FREESTANDING_ELF := obj/freestanding-rv32i.elf
 
-.PHONY: all clean test test-asan test-ubsan check
+.PHONY: all clean test test-asan test-ubsan test-toolchain check
 
 all: $(TARGET)
 
@@ -149,10 +151,14 @@ test-ubsan: $(UBSAN_TARGET) $(UBSAN_DECODE_TEST_TARGET) $(UBSAN_ASSEMBLER_TEST_T
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 $(UBSAN_ELF_LOADER_TEST_TARGET)
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 $(TEST_SCRIPT) $(UBSAN_TARGET)
 
+test-toolchain: $(TARGET)
+	$(TOOLCHAIN_TEST_SCRIPT) $(TARGET) $(FREESTANDING_ELF)
+
 check:
 	$(MAKE) test
 	$(MAKE) test-asan
 	$(MAKE) test-ubsan
+	$(MAKE) test-toolchain
 
 clean:
 	rm -rf obj
