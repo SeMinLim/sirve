@@ -36,17 +36,23 @@ typedef struct {
 	bool loadAddrSet;
 	bool entryAddrSet;
 	bool startImmediate;
+	bool traceOn;
+	bool maxInstructionsSet;
+	uint64_t maxInstructions;
 } CommandLineOptions;
 
 
 static void printUsage( const char *program ) {
 	printf( "usage:\n" );
-	printf( "  %s --asm <assembly-file> [run]\n", program );
-	printf( "  %s --bin <binary-file> [--load <address>] [--entry <address>] [run]\n",
+	printf( "  %s --asm <assembly-file> [--trace] [--max-instructions <count>] [run]\n",
 	        program
 	);
-	printf( "  %s --elf <elf32-file> [run]\n", program );
-	printf( "  %s <assembly-file> [run]\n", program );
+	printf( "  %s --bin <binary-file> [--load <address>] [--entry <address>]\n", program );
+	printf( "      [--trace] [--max-instructions <count>] [run]\n" );
+	printf( "  %s --elf <elf32-file> [--trace] [--max-instructions <count>] [run]\n",
+	        program
+	);
+	printf( "  %s <assembly-file> [--trace] [--max-instructions <count>] [run]\n", program );
 }
 
 static void printRegFile( const uint32_t reg[32] ) {
@@ -69,6 +75,22 @@ static bool parseNumber( const char *text, uint32_t *value ) {
 		return false;
 	}
 	*value = (uint32_t)parsed;
+	return true;
+}
+
+static bool parseCount( const char *text, uint64_t *value ) {
+	if ( text == NULL || value == NULL ) return false;
+	while ( isspace((unsigned char)*text) ) text ++;
+	if ( *text == '\0' ) return false;
+
+	char *end = NULL;
+	errno = 0;
+	unsigned long long parsed = strtoull(text, &end, 0);
+	while ( end != NULL && isspace((unsigned char)*end) ) end ++;
+	if ( errno == ERANGE || end == text || (end != NULL && *end != '\0') || parsed == 0 ) {
+		return false;
+	}
+	*value = (uint64_t)parsed;
 	return true;
 }
 
@@ -147,6 +169,25 @@ static bool parseCommandLine(
 				return false;
 			}
 			options->entryAddrSet = true;
+			argIdx += 2;
+			continue;
+		}
+		if ( strcmp(argv[argIdx], "--trace") == 0 ) {
+			if ( options->traceOn ) {
+				printf( "Duplicate trace option\n" );
+				return false;
+			}
+			options->traceOn = true;
+			argIdx ++;
+			continue;
+		}
+		if ( strcmp(argv[argIdx], "--max-instructions") == 0 ) {
+			if ( options->maxInstructionsSet || argIdx + 1 >= argc ||
+			     !parseCount(argv[argIdx + 1], &options->maxInstructions) ) {
+				printf( "Malformed instruction limit\n" );
+				return false;
+			}
+			options->maxInstructionsSet = true;
 			argIdx += 2;
 			continue;
 		}
@@ -505,6 +546,45 @@ static bool handleDebugger(
 	}
 }
 
+static const char *stepStatusName( RV32IStepStatus status ) {
+	switch ( status ) {
+		case RV32I_STEP_OK: return "ok";
+		case RV32I_STEP_EBREAK: return "ebreak";
+		case RV32I_STEP_ECALL: return "ecall";
+		case RV32I_STEP_ILLEGAL_INSTRUCTION: return "illegal-instruction";
+		case RV32I_STEP_INSTRUCTION_MISALIGNED: return "instruction-misaligned";
+		case RV32I_STEP_INSTRUCTION_ACCESS_FAULT: return "instruction-access-fault";
+		case RV32I_STEP_LOAD_MISALIGNED: return "load-misaligned";
+		case RV32I_STEP_LOAD_ACCESS_FAULT: return "load-access-fault";
+		case RV32I_STEP_STORE_MISALIGNED: return "store-misaligned";
+		case RV32I_STEP_STORE_ACCESS_FAULT: return "store-access-fault";
+		default: return "unknown";
+	}
+}
+
+static void printTrace( const RV32IStepResult *result ) {
+	if ( result == NULL ) return;
+
+	printf( "TRACE pc=0x%08x raw=0x%08x", result->pc, result->raw );
+	if ( result->regWrite ) {
+		printf( " rd=x%02u value=0x%08x", result->regIdx, result->regValue );
+	}
+	if ( result->memRead ) {
+		printf( " load=0x%08x", result->memReadAddr );
+	}
+	if ( result->memWrite ) {
+		printf( " store=0x%08x size=%u value=0x%08x",
+		        result->memWriteAddr,
+		        result->memWriteSize,
+		        result->memWriteValue
+		);
+	}
+	printf( " next=0x%08x status=%s\n",
+	        result->nextPc,
+	        stepStatusName(result->status)
+	);
+}
+
 static bool printExecutionError( const RV32IStepResult *result ) {
 	switch ( result->status ) {
 		case RV32I_STEP_INSTRUCTION_MISALIGNED:
@@ -549,7 +629,9 @@ static bool execute(
 	uint32_t sourceMapCnt,
 	uint32_t textStart,
 	uint32_t textEnd,
-	bool startImmediate
+	bool startImmediate,
+	bool traceOn,
+	uint64_t maxInstructions
 ) {
 	uint32_t regMirror[32] = {0};
 	bool *breakpoints = new (std::nothrow) bool[sourceMapCnt];
@@ -578,6 +660,8 @@ static bool execute(
 
 		RV32IStepResult stepResult;
 		RV32IStepStatus status = stepRV32I(state, memory, &stepResult);
+		if ( traceOn ) printTrace(&stepResult);
+
 		if ( status == RV32I_STEP_EBREAK ) {
 			int sourceLine = getSourceLine(sourceMap, sourceMapCnt, stepResult.pc);
 			printf( "\n\n----------\n\n" );
@@ -602,6 +686,13 @@ static bool execute(
 			printExecutionError(&stepResult);
 			delete[] breakpoints;
 			return false;
+		}
+
+		if ( running && maxInstructions != 0 && state->instCnt >= maxInstructions ) {
+			printf( "Stopped after %llu instructions.\n",
+			        (unsigned long long)state->instCnt
+			);
+			running = false;
 		}
 
 		if ( !continuous && stepCnt > 0 ) {
@@ -714,7 +805,8 @@ int main( int argc, char **argv ) {
 	initializeProcessorState(&state, entryAddr);
 	if ( options.inputMode == INPUT_ELF32 ) state.reg[2] = MEM_BYTES;
 	bool success = execute(&memory, &state, sourceMap, SOURCE_MAP_CNT,
-	                       textStart, textEnd, options.startImmediate);
+	                       textStart, textEnd, options.startImmediate, options.traceOn,
+	                       options.maxInstructionsSet ? options.maxInstructions : 0);
 
 	free(data);
 	delete[] sourceMap;

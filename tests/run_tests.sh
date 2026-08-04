@@ -126,6 +126,31 @@ runElf32Test() {
 	printPass "$testName"
 }
 
+runTraceTest() {
+	local testName="$1"
+	local assemblyFile="$2"
+	shift 2
+	local outputFile="$TMP_DIR/test-$TEST_CNT.log"
+
+	TEST_CNT=$((TEST_CNT + 1))
+	if ! runEmulator "$EMULATOR" --asm "$assemblyFile" --trace \
+		--max-instructions 3 run > "$outputFile" 2>&1; then
+		printFailure "$testName" "$outputFile"
+	fi
+
+	for expectedText in "$@"; do
+		if ! grep -Fq "$expectedText" "$outputFile"; then
+			printf "Missing expected output: %s\n" "$expectedText"
+			printFailure "$testName" "$outputFile"
+		fi
+	done
+
+	if [ "$(grep -c '^TRACE ' "$outputFile")" -ne 3 ]; then
+		printFailure "$testName" "$outputFile"
+	fi
+	printPass "$testName"
+}
+
 printf '%s\n' "---------------------------------------------------------------------"
 printf '%s\n' "[STEP 1] Running RV32I functional regression tests."
 printf '%s\n' "---------------------------------------------------------------------"
@@ -201,6 +226,13 @@ runElf32Test "Execute RV32I ELF32 executable" \
 	"x03:0x12345678" \
 	"x04:0x00000000" \
 	"Reached Halt and Catch Fire instruction!"
+
+runTraceTest "Emit bounded architectural trace" \
+	"$ASM_DIR/rv32i_core.s" \
+	"TRACE pc=0x00000000 raw=0x00000093 rd=x01 value=0x00000000 next=0x00000004 status=ok" \
+	"TRACE pc=0x00000004 raw=0x00100113 rd=x02 value=0x00000001 next=0x00000008 status=ok" \
+	"TRACE pc=0x00000008 raw=0xfff00193 rd=x03 value=0xffffffff next=0x0000000c status=ok" \
+	"Stopped after 3 instructions."
 
 printf '%s\n' "---------------------------------------------------------------------"
 printf '%s\n' "[STEP 2] Running input and execution boundary tests."

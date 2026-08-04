@@ -50,6 +50,12 @@ static void expectValue( const char *name, uint32_t actual, uint32_t expected ) 
 	printPass(name);
 }
 
+static void expectBool( const char *name, bool actual, bool expected ) {
+	testCnt ++;
+	if ( actual != expected ) printFailure(name, "Trace metadata mismatch." );
+	printPass(name);
+}
+
 static void initializeTest(
 	uint8_t memoryData[MEMORY_SIZE],
 	Memory *memory,
@@ -71,7 +77,10 @@ static void testFenceAndBreak( void ) {
 
 	expectStatus("Execute FENCE", stepRV32I(&state, &memory, &result), RV32I_STEP_OK);
 	expectValue("Advance after FENCE", state.pc, 4);
+	expectValue("Report FENCE next PC", result.nextPc, 4);
+	expectBool("Report no FENCE register write", result.regWrite, false);
 	expectStatus("Stop on EBREAK", stepRV32I(&state, &memory, &result), RV32I_STEP_EBREAK);
+	expectValue("Keep PC on EBREAK", result.nextPc, 4);
 	expectValue("Count fetched instructions", (uint32_t)state.instCnt, 2);
 }
 
@@ -88,6 +97,10 @@ static void testJALROverlap( void ) {
 	expectStatus("Prepare JALR target", stepRV32I(&state, &memory, &result), RV32I_STEP_OK);
 	expectStatus("Execute overlapping JALR", stepRV32I(&state, &memory, &result), RV32I_STEP_OK);
 	expectValue("Use old rs1 value for JALR target", state.pc, 16);
+	expectValue("Report JALR next PC", result.nextPc, 16);
+	expectBool("Report JALR register write", result.regWrite, true);
+	expectValue("Report JALR destination", result.regIdx, 1);
+	expectValue("Report JALR return address", result.regValue, 8);
 	expectValue("Write JALR return address", state.reg[1], 8);
 	expectStatus("Execute JALR target", stepRV32I(&state, &memory, &result), RV32I_STEP_OK);
 	expectValue("Execute instruction at target", state.reg[3], 7);
@@ -134,10 +147,31 @@ static void testRegisterAndMemorySemantics( void ) {
 	writeWordLE(memoryData, 20, 0x0020a023); // sw x2, 0(x1)
 	writeWordLE(memoryData, 24, 0x0000a183); // lw x3, 0(x1)
 
-	for ( int i = 0; i < 7; i ++ ) {
-		expectStatus("Execute register/memory instruction",
+	expectStatus("Execute x0 write", stepRV32I(&state, &memory, &result), RV32I_STEP_OK);
+	expectBool("Omit x0 from register trace", result.regWrite, false);
+
+	for ( int i = 0; i < 4; i ++ ) {
+		expectStatus("Execute register instruction",
 		             stepRV32I(&state, &memory, &result), RV32I_STEP_OK);
 	}
+	expectBool("Report register write", result.regWrite, true);
+	expectValue("Report register destination", result.regIdx, 2);
+	expectValue("Report register value", result.regValue, 0x12345678);
+
+	expectStatus("Execute traced word store",
+	             stepRV32I(&state, &memory, &result), RV32I_STEP_OK);
+	expectBool("Report memory write", result.memWrite, true);
+	expectValue("Report memory write address", result.memWriteAddr, 0x0000fffc);
+	expectValue("Report memory write size", result.memWriteSize, 4);
+	expectValue("Report memory write value", result.memWriteValue, 0x12345678);
+
+	expectStatus("Execute traced word load",
+	             stepRV32I(&state, &memory, &result), RV32I_STEP_OK);
+	expectBool("Report memory read", result.memRead, true);
+	expectValue("Report memory read address", result.memReadAddr, 0x0000fffc);
+	expectBool("Report load register write", result.regWrite, true);
+	expectValue("Report load destination", result.regIdx, 3);
+	expectValue("Report load value", result.regValue, 0x12345678);
 	expectValue("Keep x0 immutable", state.reg[0], 0);
 	expectValue("Load stored word", state.reg[3], 0x12345678);
 }

@@ -27,10 +27,12 @@ UBSAN_EXECUTE_TEST_TARGET := obj/rv32i_execute_test-ubsan
 UBSAN_LOADER_TEST_TARGET := obj/loader_test-ubsan
 UBSAN_ELF_LOADER_TEST_TARGET := obj/elf_loader_test-ubsan
 TEST_SCRIPT := tests/run_tests.sh
+SPIKE_TEST_SCRIPT := tests/run_spike_diff_test.sh
+SPIKE_DIFF_ELF := obj/spike-diff-rv32i.elf
 TOOLCHAIN_TEST_SCRIPT := tests/run_gnu_toolchain_test.sh
 FREESTANDING_ELF := obj/freestanding-rv32i.elf
 
-.PHONY: all clean test test-asan test-ubsan test-toolchain check
+.PHONY: all clean test test-asan test-ubsan test-toolchain test-spike check
 
 all: $(TARGET)
 
@@ -153,6 +155,9 @@ test-ubsan: $(UBSAN_TARGET) $(UBSAN_DECODE_TEST_TARGET) $(UBSAN_ASSEMBLER_TEST_T
 
 test-toolchain: $(TARGET)
 	$(TOOLCHAIN_TEST_SCRIPT) $(TARGET) $(FREESTANDING_ELF)
+
+test-spike: $(TARGET)
+	$(SPIKE_TEST_SCRIPT) $(TARGET) $(SPIKE_DIFF_ELF)
 
 check:
 	$(MAKE) test

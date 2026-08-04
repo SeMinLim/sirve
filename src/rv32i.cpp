@@ -45,11 +45,45 @@ static void initializeStepResult( RV32IStepResult *result, uint32_t pc ) {
 	memset(result, 0, sizeof(*result));
 	result->status = RV32I_STEP_OK;
 	result->pc = pc;
+	result->nextPc = pc;
 	result->instr.op = RV32I_INVALID;
 }
 
-static void writeRegister( ProcessorState *state, uint32_t reg, uint32_t value ) {
-	if ( reg != 0 ) state->reg[reg] = value;
+static void writeRegister(
+	ProcessorState *state,
+	uint32_t reg,
+	uint32_t value,
+	RV32IStepResult *result
+) {
+	if ( reg == 0 ) return;
+
+	state->reg[reg] = value;
+	if ( result != NULL ) {
+		result->regWrite = true;
+		result->regIdx = reg;
+		result->regValue = value;
+	}
+}
+
+static void recordMemoryRead( RV32IStepResult *result, uint32_t addr ) {
+	if ( result == NULL ) return;
+	result->memRead = true;
+	result->memReadAddr = addr;
+}
+
+static void recordMemoryWrite(
+	RV32IStepResult *result,
+	uint32_t addr,
+	uint32_t size,
+	uint32_t value
+) {
+	if ( result == NULL ) return;
+	result->memWrite = true;
+	result->memWriteAddr = addr;
+	result->memWriteSize = size;
+	if ( size == 1 ) result->memWriteValue = value & 0xffu;
+	else if ( size == 2 ) result->memWriteValue = value & 0xffffu;
+	else result->memWriteValue = value;
 }
 
 static RV32IStepStatus validateInstructionTarget(
@@ -333,22 +367,22 @@ RV32IStepStatus stepRV32I(
 
 	switch ( instr.op ) {
 		case RV32I_LUI:
-			writeRegister(state, instr.rd, (uint32_t)instr.imm);
+			writeRegister(state, instr.rd, (uint32_t)instr.imm, result);
 			break;
 		case RV32I_AUIPC:
-			writeRegister(state, instr.rd, pc + (uint32_t)instr.imm);
+			writeRegister(state, instr.rd, pc + (uint32_t)instr.imm, result);
 			break;
 		case RV32I_JAL:
 			nextPc = pc + (uint32_t)instr.imm;
 			stepStatus = validateInstructionTarget(memory, nextPc, result);
 			if ( stepStatus != RV32I_STEP_OK ) break;
-			writeRegister(state, instr.rd, pc + 4);
+			writeRegister(state, instr.rd, pc + 4, result);
 			break;
 		case RV32I_JALR:
 			nextPc = (rs1Value + (uint32_t)instr.imm) & ~1u;
 			stepStatus = validateInstructionTarget(memory, nextPc, result);
 			if ( stepStatus != RV32I_STEP_OK ) break;
-			writeRegister(state, instr.rd, pc + 4);
+			writeRegister(state, instr.rd, pc + 4, result);
 			break;
 		case RV32I_BEQ: branchTaken = rs1Value == rs2Value; break;
 		case RV32I_BNE: branchTaken = rs1Value != rs2Value; break;
@@ -361,7 +395,9 @@ RV32IStepStatus stepRV32I(
 			memoryStatus = memoryRead8(memory, effectiveAddr, &memoryValue);
 			stepStatus = mapLoadStatus(memoryStatus, effectiveAddr, result);
 			if ( stepStatus == RV32I_STEP_OK ) {
-				writeRegister(state, instr.rd, (uint32_t)signExtendImmediate(memoryValue, 8));
+				recordMemoryRead(result, effectiveAddr);
+				writeRegister(state, instr.rd,
+				              (uint32_t)signExtendImmediate(memoryValue, 8), result);
 			}
 			break;
 		case RV32I_LH:
@@ -369,71 +405,126 @@ RV32IStepStatus stepRV32I(
 			memoryStatus = memoryRead16(memory, effectiveAddr, &memoryValue);
 			stepStatus = mapLoadStatus(memoryStatus, effectiveAddr, result);
 			if ( stepStatus == RV32I_STEP_OK ) {
-				writeRegister(state, instr.rd, (uint32_t)signExtendImmediate(memoryValue, 16));
+				recordMemoryRead(result, effectiveAddr);
+				writeRegister(state, instr.rd,
+				              (uint32_t)signExtendImmediate(memoryValue, 16), result);
 			}
 			break;
 		case RV32I_LW:
 			effectiveAddr = rs1Value + (uint32_t)instr.imm;
 			memoryStatus = memoryRead32(memory, effectiveAddr, &memoryValue);
 			stepStatus = mapLoadStatus(memoryStatus, effectiveAddr, result);
-			if ( stepStatus == RV32I_STEP_OK ) writeRegister(state, instr.rd, memoryValue);
+			if ( stepStatus == RV32I_STEP_OK ) {
+				recordMemoryRead(result, effectiveAddr);
+				writeRegister(state, instr.rd, memoryValue, result);
+			}
 			break;
 		case RV32I_LBU:
 			effectiveAddr = rs1Value + (uint32_t)instr.imm;
 			memoryStatus = memoryRead8(memory, effectiveAddr, &memoryValue);
 			stepStatus = mapLoadStatus(memoryStatus, effectiveAddr, result);
-			if ( stepStatus == RV32I_STEP_OK ) writeRegister(state, instr.rd, memoryValue & 0xffu);
+			if ( stepStatus == RV32I_STEP_OK ) {
+				recordMemoryRead(result, effectiveAddr);
+				writeRegister(state, instr.rd, memoryValue & 0xffu, result);
+			}
 			break;
 		case RV32I_LHU:
 			effectiveAddr = rs1Value + (uint32_t)instr.imm;
 			memoryStatus = memoryRead16(memory, effectiveAddr, &memoryValue);
 			stepStatus = mapLoadStatus(memoryStatus, effectiveAddr, result);
-			if ( stepStatus == RV32I_STEP_OK ) writeRegister(state, instr.rd, memoryValue & 0xffffu);
+			if ( stepStatus == RV32I_STEP_OK ) {
+				recordMemoryRead(result, effectiveAddr);
+				writeRegister(state, instr.rd, memoryValue & 0xffffu, result);
+			}
 			break;
 		case RV32I_SB:
 			effectiveAddr = rs1Value + (uint32_t)instr.imm;
 			memoryStatus = memoryWrite8(memory, effectiveAddr, rs2Value);
 			stepStatus = mapStoreStatus(memoryStatus, effectiveAddr, result);
+			if ( stepStatus == RV32I_STEP_OK ) {
+				recordMemoryWrite(result, effectiveAddr, 1, rs2Value);
+			}
 			break;
 		case RV32I_SH:
 			effectiveAddr = rs1Value + (uint32_t)instr.imm;
 			memoryStatus = memoryWrite16(memory, effectiveAddr, rs2Value);
 			stepStatus = mapStoreStatus(memoryStatus, effectiveAddr, result);
+			if ( stepStatus == RV32I_STEP_OK ) {
+				recordMemoryWrite(result, effectiveAddr, 2, rs2Value);
+			}
 			break;
 		case RV32I_SW:
 			effectiveAddr = rs1Value + (uint32_t)instr.imm;
 			memoryStatus = memoryWrite32(memory, effectiveAddr, rs2Value);
 			stepStatus = mapStoreStatus(memoryStatus, effectiveAddr, result);
+			if ( stepStatus == RV32I_STEP_OK ) {
+				recordMemoryWrite(result, effectiveAddr, 4, rs2Value);
+			}
 			break;
-		case RV32I_ADDI: writeRegister(state, instr.rd, rs1Value + (uint32_t)instr.imm); break;
+		case RV32I_ADDI:
+			writeRegister(state, instr.rd, rs1Value + (uint32_t)instr.imm, result);
+			break;
 		case RV32I_SLTI:
 			writeRegister(state, instr.rd,
-			              bitCastSigned32(rs1Value) < instr.imm ? 1u : 0u);
+			              bitCastSigned32(rs1Value) < instr.imm ? 1u : 0u, result);
 			break;
 		case RV32I_SLTIU:
-			writeRegister(state, instr.rd, rs1Value < (uint32_t)instr.imm ? 1u : 0u);
+			writeRegister(state, instr.rd,
+			              rs1Value < (uint32_t)instr.imm ? 1u : 0u, result);
 			break;
-		case RV32I_XORI: writeRegister(state, instr.rd, rs1Value ^ (uint32_t)instr.imm); break;
-		case RV32I_ORI: writeRegister(state, instr.rd, rs1Value | (uint32_t)instr.imm); break;
-		case RV32I_ANDI: writeRegister(state, instr.rd, rs1Value & (uint32_t)instr.imm); break;
-		case RV32I_SLLI: writeRegister(state, instr.rd, rs1Value << ((uint32_t)instr.imm & 0x1f)); break;
-		case RV32I_SRLI: writeRegister(state, instr.rd, rs1Value >> ((uint32_t)instr.imm & 0x1f)); break;
+		case RV32I_XORI:
+			writeRegister(state, instr.rd, rs1Value ^ (uint32_t)instr.imm, result);
+			break;
+		case RV32I_ORI:
+			writeRegister(state, instr.rd, rs1Value | (uint32_t)instr.imm, result);
+			break;
+		case RV32I_ANDI:
+			writeRegister(state, instr.rd, rs1Value & (uint32_t)instr.imm, result);
+			break;
+		case RV32I_SLLI:
+			writeRegister(state, instr.rd,
+			              rs1Value << ((uint32_t)instr.imm & 0x1f), result);
+			break;
+		case RV32I_SRLI:
+			writeRegister(state, instr.rd,
+			              rs1Value >> ((uint32_t)instr.imm & 0x1f), result);
+			break;
 		case RV32I_SRAI:
-			writeRegister(state, instr.rd, arithmeticShiftRight(rs1Value, (uint32_t)instr.imm));
+			writeRegister(state, instr.rd,
+			              arithmeticShiftRight(rs1Value, (uint32_t)instr.imm), result);
 			break;
-		case RV32I_ADD: writeRegister(state, instr.rd, rs1Value + rs2Value); break;
-		case RV32I_SUB: writeRegister(state, instr.rd, rs1Value - rs2Value); break;
-		case RV32I_SLL: writeRegister(state, instr.rd, rs1Value << (rs2Value & 0x1f)); break;
+		case RV32I_ADD:
+			writeRegister(state, instr.rd, rs1Value + rs2Value, result);
+			break;
+		case RV32I_SUB:
+			writeRegister(state, instr.rd, rs1Value - rs2Value, result);
+			break;
+		case RV32I_SLL:
+			writeRegister(state, instr.rd, rs1Value << (rs2Value & 0x1f), result);
+			break;
 		case RV32I_SLT:
 			writeRegister(state, instr.rd,
-			              bitCastSigned32(rs1Value) < bitCastSigned32(rs2Value) ? 1u : 0u);
+			              bitCastSigned32(rs1Value) < bitCastSigned32(rs2Value) ? 1u : 0u,
+			              result);
 			break;
-		case RV32I_SLTU: writeRegister(state, instr.rd, rs1Value < rs2Value ? 1u : 0u); break;
-		case RV32I_XOR: writeRegister(state, instr.rd, rs1Value ^ rs2Value); break;
-		case RV32I_SRL: writeRegister(state, instr.rd, rs1Value >> (rs2Value & 0x1f)); break;
-		case RV32I_SRA: writeRegister(state, instr.rd, arithmeticShiftRight(rs1Value, rs2Value)); break;
-		case RV32I_OR: writeRegister(state, instr.rd, rs1Value | rs2Value); break;
-		case RV32I_AND: writeRegister(state, instr.rd, rs1Value & rs2Value); break;
+		case RV32I_SLTU:
+			writeRegister(state, instr.rd, rs1Value < rs2Value ? 1u : 0u, result);
+			break;
+		case RV32I_XOR:
+			writeRegister(state, instr.rd, rs1Value ^ rs2Value, result);
+			break;
+		case RV32I_SRL:
+			writeRegister(state, instr.rd, rs1Value >> (rs2Value & 0x1f), result);
+			break;
+		case RV32I_SRA:
+			writeRegister(state, instr.rd, arithmeticShiftRight(rs1Value, rs2Value), result);
+			break;
+		case RV32I_OR:
+			writeRegister(state, instr.rd, rs1Value | rs2Value, result);
+			break;
+		case RV32I_AND:
+			writeRegister(state, instr.rd, rs1Value & rs2Value, result);
+			break;
 		case RV32I_FENCE:
 			break;
 		case RV32I_ECALL:
@@ -455,7 +546,10 @@ RV32IStepStatus stepRV32I(
 
 	state->reg[0] = 0;
 	if ( stepStatus == RV32I_STEP_OK ) state->pc = nextPc;
-	if ( result != NULL ) result->status = stepStatus;
+	if ( result != NULL ) {
+		result->status = stepStatus;
+		result->nextPc = stepStatus == RV32I_STEP_OK ? nextPc : pc;
+	}
 	return stepStatus;
 }
 

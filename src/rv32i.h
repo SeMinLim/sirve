@@ -89,9 +89,19 @@ typedef enum {
 typedef struct {
 	RV32IStepStatus status;
 	uint32_t pc;
+	uint32_t nextPc;
 	uint32_t raw;
 	uint32_t faultAddr;
 	DecodedInstr instr;
+	bool regWrite;
+	uint32_t regIdx;
+	uint32_t regValue;
+	bool memRead;
+	uint32_t memReadAddr;
+	bool memWrite;
+	uint32_t memWriteAddr;
+	uint32_t memWriteSize;
+	uint32_t memWriteValue;
 } RV32IStepResult;
 
 
