@@ -34,7 +34,7 @@ The legacy form `./obj/sirve examples/reduction.s [run]` remains supported. `hcf
 ## Debugger commands
 | Command | Operation |
 |---|---|
-| `Enter`, `s`, `s<N>` | Execute one or `N` instructions |
+| `Enter`, `s`, `s<N>` | Execute one or `N` instructions, then print all 32 registers |
 | `c` | Continue until termination or a breakpoint |
 | `r`, `r<register>` | Print registers |
 | `m<address> [count]` | Print memory words |

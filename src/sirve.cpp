@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <iostream>
 #include <new>
 #include <string>
 
@@ -464,7 +465,7 @@ static bool handleDebugger(
 		fflush( stdout );
 
 		std::string lineBuf;
-		if ( !linenoise::Readline(">>", lineBuf) ) return false;
+		if ( linenoise::Readline(">>", lineBuf) || !std::cin ) return false;
 		linenoise::AddHistory(lineBuf.c_str());
 
 		char command[128];
@@ -705,6 +706,9 @@ static bool execute(
 					}
 					regMirror[i] = state->reg[i];
 				}
+			}
+			if ( (stepCnt == 0 || !running) && status == RV32I_STEP_OK ) {
+				printRegFile(state->reg);
 			}
 		}
 		fflush( stdout );
