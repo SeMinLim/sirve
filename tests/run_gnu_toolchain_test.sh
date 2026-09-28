@@ -162,8 +162,8 @@ fi
 for expectedText in \
 	"Loading ELF32 executable" \
 	"[System output]: 0x36" \
-	"x02:0x00010000" \
-	"x10:0x00000036" \
+	"x02(sp):0x00010000" \
+	"x10(a0):0x00000036" \
 	"Reached Halt and Catch Fire instruction!"; do
 	if ! grep -Fq "$expectedText" "$OUTPUT_FILE"; then
 		printf "Missing expected output: %s\n" "$expectedText"

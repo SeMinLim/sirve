@@ -157,55 +157,55 @@ printf '%s\n' "-----------------------------------------------------------------
 
 runSuccessTest "RV32I arithmetic, shifts, loads, and stores" \
 	"$ASM_DIR/rv32i_core.s" \
-	"x00:0x00000000" \
-	"x01:0x000000ff" \
-	"x02:0xffffffff" \
-	"x03:0x0000ffff" \
-	"x07:0x00000000" \
-	"x08:0xffffffff" \
-	"x09:0x00000001" \
-	"x10:0x00000000" \
-	"x11:0xfffffffe" \
-	"x12:0x80000001" \
-	"x13:0x80000000" \
-	"x14:0x80000000" \
-	"x15:0x00000001" \
-	"x16:0xffffffff" \
-	"x17:0x00000001" \
-	"x18:0xfffff800" \
-	"x19:0x00000001" \
-	"x20:0x00000000" \
-	"x21:0xffffff00" \
-	"x22:0x000007ff" \
-	"x23:0xfffff800" \
-	"x24:0x80000000" \
-	"x25:0x00000001" \
-	"x26:0xffffffff" \
-	"x27:0xfffff000" \
-	"x28:0x0000106c" \
-	"x29:0x00001000" \
-	"x30:0xfffff000" \
-	"x31:0xffffffff"
+	"x00(zero):0x00000000" \
+	"x01(ra):0x000000ff" \
+	"x02(sp):0xffffffff" \
+	"x03(gp):0x0000ffff" \
+	"x07(t2):0x00000000" \
+	"x08(s0):0xffffffff" \
+	"x09(s1):0x00000001" \
+	"x10(a0):0x00000000" \
+	"x11(a1):0xfffffffe" \
+	"x12(a2):0x80000001" \
+	"x13(a3):0x80000000" \
+	"x14(a4):0x80000000" \
+	"x15(a5):0x00000001" \
+	"x16(a6):0xffffffff" \
+	"x17(a7):0x00000001" \
+	"x18(s2):0xfffff800" \
+	"x19(s3):0x00000001" \
+	"x20(s4):0x00000000" \
+	"x21(s5):0xffffff00" \
+	"x22(s6):0x000007ff" \
+	"x23(s7):0xfffff800" \
+	"x24(s8):0x80000000" \
+	"x25(s9):0x00000001" \
+	"x26(s10):0xffffffff" \
+	"x27(s11):0xfffff000" \
+	"x28(t3):0x0000106c" \
+	"x29(t4):0x00001000" \
+	"x30(t5):0xfffff000" \
+	"x31(t6):0xffffffff"
 
 runSuccessTest "RV32I branches, JAL, and JALR" \
 	"$ASM_DIR/control_flow.s" \
-	"x10:0x00000000" \
-	"x12:0x00000055" \
-	"x13:0x00000066"
+	"x10(a0):0x00000000" \
+	"x12(a2):0x00000055" \
+	"x13(a3):0x00000066"
 
 runSuccessTest "JALR source and destination overlap" \
 	"$ASM_DIR/jalr_overlap.s" \
-	"x01:0x00000008" \
-	"x02:0x00000000" \
-	"x03:0x00000007"
+	"x01(ra):0x00000008" \
+	"x02(sp):0x00000000" \
+	"x03(gp):0x00000007"
 
 runSuccessTest "Aligned accesses at the memory boundary" \
 	"$ASM_DIR/memory_boundary.s" \
-	"x01:0x0000fffe" \
-	"x02:0x12345678" \
-	"x03:0x12345678" \
-	"x04:0x00000078" \
-	"x05:0x00005678"
+	"x01(ra):0x0000fffe" \
+	"x02(sp):0x12345678" \
+	"x03(gp):0x12345678" \
+	"x04(tp):0x00000078" \
+	"x05(t0):0x00005678"
 
 runSuccessTest "Exact data-segment boundary" \
 	"$ASM_DIR/data_boundary.s" \
@@ -215,16 +215,16 @@ RAW_BINARY_FILE="$TMP_DIR/raw-rv32i.bin"
 printf '\x93\x00\x70\x00\x73\x00\x10\x00' > "$RAW_BINARY_FILE"
 runRawBinaryTest "Execute raw RV32I binary" \
 	"$RAW_BINARY_FILE" \
-	"x01:0x00000007" \
+	"x01(ra):0x00000007" \
 	"Reached Halt and Catch Fire instruction!"
 
 runElf32Test "Execute RV32I ELF32 executable" \
 	"$ROOT_DIR/obj/test-rv32i.elf" \
 	"Loading ELF32 executable" \
-	"x01:0x00000007" \
-	"x02:0x00010000" \
-	"x03:0x12345678" \
-	"x04:0x00000000" \
+	"x01(ra):0x00000007" \
+	"x02(sp):0x00010000" \
+	"x03(gp):0x12345678" \
+	"x04(tp):0x00000000" \
 	"Reached Halt and Catch Fire instruction!"
 
 runTraceTest "Emit bounded architectural trace" \

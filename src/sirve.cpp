@@ -22,6 +22,14 @@
 #define SOURCE_MAP_CNT (MEM_BYTES / 4)
 
 
+static const char * const registerNames[32] = {
+	"zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2",
+	"s0", "s1", "a0", "a1", "a2", "a3", "a4", "a5",
+	"a6", "a7", "s2", "s3", "s4", "s5", "s6", "s7",
+	"s8", "s9", "s10", "s11", "t3", "t4", "t5", "t6"
+};
+
+
 typedef enum {
 	INPUT_ASSEMBLY = 0,
 	INPUT_RAW_BINARY,
@@ -58,7 +66,9 @@ static void printUsage( const char *program ) {
 
 static void printRegFile( const uint32_t reg[32] ) {
 	for ( int i = 0; i < 32; i ++ ) {
-		printf( "x%02d:0x%08x ", i, reg[i] );
+		char label[16];
+		snprintf(label, sizeof(label), "x%02d(%s):", i, registerNames[i]);
+		printf( "%10s0x%08x ", label, reg[i] );
 		if ( (i + 1) % 8 == 0 ) printf( "\n" );
 	}
 }
@@ -214,12 +224,6 @@ static int parseRegisterName( const char *text ) {
 		return (int)reg;
 	}
 
-	static const char *registerNames[32] = {
-		"zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2",
-		"s0", "s1", "a0", "a1", "a2", "a3", "a4", "a5",
-		"a6", "a7", "s2", "s3", "s4", "s5", "s6", "s7",
-		"s8", "s9", "s10", "s11", "t3", "t4", "t5", "t6"
-	};
 	for ( int i = 0; i < 32; i ++ ) {
 		if ( strcmp(text, registerNames[i]) == 0 ) return i;
 	}
