@@ -28,6 +28,23 @@ make
 
 The legacy form `./obj/sirve examples/reduction.s [run]` remains supported. `hcf` is encoded as the standard RV32I `EBREAK` instruction.
 
+## Memory map
+
+SIRVE provides 64 KiB of RAM at `0x00000000`–`0x0000FFFF`. Section placement depends on the input format.
+
+| Section / region | Start address | Placement |
+|---|---|---|
+| `.text` (`--asm`) | `0x00000000` | Built-in assembler instruction region, through `0x00007FFF` |
+| `.data` (`--asm`) | `0x00008000` | Built-in assembler data region, through `0x0000FFFF`; shares RAM with any program-managed stack or heap |
+| `.rodata`, `.bss` (`--asm`) | No separate region | These section directives are unsupported; `.zero` can reserve zero-filled bytes in `.data` |
+| `.text`, `.rodata`, `.data`, `.bss` (`--elf`) | Defined by the ELF linker script | The loader places `PT_LOAD` segments at their `p_vaddr` addresses and zero-fills `p_memsz - p_filesz` bytes, including `.bss` |
+| Raw image (`--bin`) | `--load`, default `0x00000000` | Loaded as one image without section metadata |
+| Stack | Program-defined; ELF initial `sp` is `0x00010000` | No separate region is reserved. Assembly/raw inputs start with `sp = 0`; the supplied assembly examples set it to `0x00010000` and grow the stack downward |
+| Heap | Program-defined | No fixed start address or built-in allocator |
+| System output MMIO | `0x00010000` | Outside RAM; writes print `[System output]`, while reads are out of bounds |
+
+`0x00010000` as a stack-top value is one byte past RAM; stack storage must be allocated below it. The fixed `.text` and `.data` addresses above apply only to the built-in assembler, not ELF or raw input.
+
 ## Architectural trace
 `--trace` emits the PC, raw instruction, next PC, status, register write, load address, and store address/size/value for each instruction. `--max-instructions` provides deterministic bounded execution.
 
